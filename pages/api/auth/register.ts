@@ -1,4 +1,3 @@
-console.log("DATABASE_URL:", process.env.DATABASE_URL);
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { UserRole } from '@prisma/client';
 import { prisma } from '../../../lib/prisma';
