@@ -401,6 +401,13 @@ const DOCUMENT_TYPES = [
   "REPORT",
   "OTHER",
 ];
+const DOCUMENT_REVIEW_STATUSES = [
+  "UPLOADED",
+  "PROCESSING",
+  "REVIEWED",
+  "REJECTED",
+  "FAILED",
+];
 const RULE_TRANSACTION_TYPES = [
   "CUSTOMER_INVOICE",
   "CUSTOMER_PAYMENT",
@@ -721,6 +728,7 @@ export default function EntityWorkspacePage() {
   const [addingCounterparty, setAddingCounterparty] = useState(false);
   const [addingDocument, setAddingDocument] = useState(false);
   const [openingDocumentId, setOpeningDocumentId] = useState<string | null>(null);
+  const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null);
   const [documentFileInputKey, setDocumentFileInputKey] = useState(0);
   const [addingAccount, setAddingAccount] = useState(false);
   const [previewingAccount, setPreviewingAccount] = useState(false);
@@ -1134,6 +1142,19 @@ export default function EntityWorkspacePage() {
     [filteredRules, showAllRules]
   );
 
+  const documentReviewSummary = useMemo(
+    () => ({
+      pending: documents.filter((document) =>
+        ["UPLOADED", "PROCESSING"].includes(document.status)
+      ).length,
+      reviewed: documents.filter((document) => document.status === "REVIEWED").length,
+      exceptions: documents.filter((document) =>
+        ["REJECTED", "FAILED"].includes(document.status)
+      ).length,
+    }),
+    [documents]
+  );
+
   const trialBalanceRows = trialBalance?.accounts || [];
   const visibleTrialBalanceRows = useMemo(
     () =>
@@ -1514,6 +1535,43 @@ export default function EntityWorkspacePage() {
       );
     } finally {
       setOpeningDocumentId(null);
+    }
+  };
+
+  const handleDocumentStatus = async (
+    document: AccountingDocument,
+    status: string
+  ) => {
+    if (document.status === status) return;
+
+    setActiveDocumentId(document.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const updatedDocument = await request<AccountingDocument>(
+        `/api/accounting/documents/${document.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        }
+      );
+
+      setDocuments((current) =>
+        current.map((item) =>
+          item.id === updatedDocument.id ? updatedDocument : item
+        )
+      );
+      setSuccess(`Document status updated to ${updatedDocument.status}.`);
+    } catch (statusError) {
+      setError(
+        statusError instanceof Error
+          ? statusError.message
+          : "Unable to update document status"
+      );
+    } finally {
+      setActiveDocumentId(null);
     }
   };
 
@@ -2967,10 +3025,21 @@ export default function EntityWorkspacePage() {
             )}
 
             <div className={cn(CARD, "overflow-hidden")}>
-              <div className="border-b border-black/5 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/5 px-5 py-4">
                 <h2 className="text-xl font-semibold tracking-[-0.03em]">
                   Documents
                 </h2>
+                <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.12em]">
+                  <span className="rounded-full bg-amber-50 px-3 py-1.5 text-amber-700">
+                    Pending {documentReviewSummary.pending}
+                  </span>
+                  <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">
+                    Reviewed {documentReviewSummary.reviewed}
+                  </span>
+                  <span className="rounded-full bg-red-50 px-3 py-1.5 text-red-600">
+                    Exceptions {documentReviewSummary.exceptions}
+                  </span>
+                </div>
               </div>
               {!documents.length ? (
                 <p className="px-5 py-10 text-sm font-medium text-black/45">
@@ -3027,15 +3096,33 @@ export default function EntityWorkspacePage() {
                             {document.transaction?.type || "—"}
                           </td>
                           <td className="px-5 py-4 text-right">
-                            <a
-                              href={documentDownloadUrl(document)}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              onClick={(event) => handleOpenDocument(event, document)}
-                              className="rounded-full border border-black/10 px-3 py-2 text-[10px] font-semibold transition hover:border-black hover:bg-black hover:text-white"
-                            >
-                              {openingDocumentId === document.id ? "Opening..." : "Open"}
-                            </a>
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              {entityDetail.permissions.canManageDocuments && (
+                                <select
+                                  value={document.status}
+                                  disabled={activeDocumentId === document.id}
+                                  onChange={(event) =>
+                                    handleDocumentStatus(document, event.target.value)
+                                  }
+                                  className="rounded-full border border-black/10 bg-white px-3 py-2 text-[10px] font-semibold text-black/65 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {DOCUMENT_REVIEW_STATUSES.map((status) => (
+                                    <option key={status} value={status}>
+                                      {status}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                              <a
+                                href={documentDownloadUrl(document)}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                onClick={(event) => handleOpenDocument(event, document)}
+                                className="rounded-full border border-black/10 px-3 py-2 text-[10px] font-semibold transition hover:border-black hover:bg-black hover:text-white"
+                              >
+                                {openingDocumentId === document.id ? "Opening..." : "Open"}
+                              </a>
+                            </div>
                           </td>
                         </tr>
                       ))}
