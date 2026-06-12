@@ -405,10 +405,12 @@ export default withAuth(async (req: AuthenticatedNextApiRequest, res: NextApiRes
               transaction: {
                 select: {
                   id: true,
+                  date: true,
                   type: true,
                   amount: true,
                   currency: true,
                   status: true,
+                  description: true,
                 },
               },
             },
@@ -454,10 +456,12 @@ export default withAuth(async (req: AuthenticatedNextApiRequest, res: NextApiRes
               transaction: {
                 select: {
                   id: true,
+                  date: true,
                   type: true,
                   amount: true,
                   currency: true,
                   status: true,
+                  description: true,
                 },
               },
             },

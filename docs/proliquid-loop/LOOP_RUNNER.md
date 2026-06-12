@@ -41,10 +41,112 @@ Each run must identify and complete the highest-priority unfinished increment th
 The loop must favor:
 
 - small completed increments over broad unfinished initiatives
+- visible business value over internal workflow scaffolding
+- end-to-end workflow completion over additional intermediate states
 - codebase evidence over assumptions
 - operational control over speed
 - accounting integrity over automation
 - auditability over convenience
+
+---
+
+## Execution Selection Doctrine
+
+The loop runner must prefer increments that make Proliquid more usable as a working financial operations product, not merely more internally structured.
+
+### 1. Visible Business Value First
+
+When multiple valid increments are available, prefer the increment that creates the largest visible business outcome for an end user, operator, reviewer, or accountant.
+
+Visible business value means that, after the run is complete, a user can perform a meaningful business action that was previously impossible or materially incomplete.
+
+Examples of visible business value:
+
+- a reviewed document can become a draft accounting proposal
+- a ready invoice candidate can become a draft journal-backed transaction
+- a reviewer can complete a real accounting handoff
+- a client or operator can move one workflow stage closer to a usable output
+
+Examples of lower-priority internal-only value:
+
+- adding statuses without completing the next business step
+- adding intermediate flags that do not unlock a new user action
+- adding control metadata without an immediately usable workflow outcome
+
+### 2. Workflow Completion Preference
+
+Prefer completing an existing workflow before extending it with additional internal states, metadata, or control layers.
+
+When choosing between:
+
+- making a workflow more internally detailed
+- making the workflow reach its next business-complete milestone
+
+prefer the second option unless controls would be weakened by doing so.
+
+### 3. Avoid Status-Only Loops
+
+Avoid loop runs whose primary outcome is the addition of new statuses, transitions, flags, or workflow states unless those states unlock immediate user-facing value in the same run.
+
+A new state is acceptable when it directly enables the next visible workflow action.
+
+A new state is not sufficient justification by itself.
+
+### 4. End-To-End Thinking
+
+Favor progressions such as:
+
+Document  
+→ Accounting Proposal  
+→ Review  
+→ Journal Draft
+
+over progressions such as:
+
+Document  
+→ Status A  
+→ Status B  
+→ Status C
+
+when both paths are compatible with Proliquid's accounting and control doctrine.
+
+### 5. Product Value Test
+
+Before selecting an increment, explicitly ask:
+
+**"If this run is completed successfully, what new business action can a user perform that was impossible before?"**
+
+If the answer is only:
+
+- an internal state change
+- an additional transition
+- more metadata
+- more workflow structure without a usable outcome
+
+then continue searching for a higher-value increment.
+
+### 6. Current Phase Workflow Priority
+
+For the current Proliquid phase, prioritize completion of:
+
+- document intake
+- invoice workflow
+- accounting proposal workflow
+- accounting review workflow
+
+before introducing additional workflow sophistication, extra internal stages, or secondary refinements.
+
+### 7. Control Remains Mandatory
+
+These execution preferences must not weaken:
+
+- human-in-the-loop doctrine
+- permissions
+- auditability
+- accounting controls
+- review requirements
+
+The loop runner should seek the highest-value increment **within** the control framework, not around it.
 
 ---
 
@@ -76,8 +178,12 @@ Select the highest-priority item that is:
 - small enough to produce a useful increment
 - consistent with the current product state
 - aligned with Proliquid's human-in-the-loop philosophy
+- stronger on visible business value than alternative candidate increments
+- more likely to complete a workflow milestone than merely extend internal state machinery
 
 Never work on more than one major feature per run.
+
+When several candidate increments are available, compare them explicitly and prefer the one that most clearly advances a user-facing workflow outcome.
 
 ## 3. Verify whether the item is already implemented
 
@@ -119,6 +225,7 @@ The plan must identify:
 - why it is selected
 - files likely involved
 - smallest valuable increment
+- the specific new business action unlocked by the increment
 - validation checks
 - risks or blockers
 
@@ -136,8 +243,16 @@ The increment should be:
 - auditable where relevant
 - compatible with existing permissions
 - aligned with existing UI and backend patterns
+- directed toward a workflow-complete outcome rather than a state-only outcome
 
 Do not expand scope during implementation.
+
+If a run can either:
+
+- add another internal status layer, or
+- complete the next meaningful business action in the workflow,
+
+prefer the latter unless it would violate accounting, review, or permission controls.
 
 ## 7. Run validation checks
 
@@ -194,6 +309,8 @@ Stop after one completed increment and wait for approval.
 
 - Never work on more than one major feature per run.
 - Prefer small completed increments over large unfinished work.
+- Prefer visible business-complete increments over internal workflow scaffolding.
+- Do not select a run whose primary outcome is only a new status, flag, or transition unless it unlocks immediate user-facing value in the same run.
 - Respect the human-in-the-loop philosophy.
 - Preserve accounting integrity.
 - Preserve auditability.
@@ -208,6 +325,7 @@ Stop after one completed increment and wait for approval.
 - Do not create or alter database schema casually.
 - Do not modify unrelated application areas.
 - Do not touch public homepage or marketing pages unless the selected loop item explicitly requires it.
+- Do not confuse workflow sophistication with business progress.
 
 ---
 
@@ -247,6 +365,7 @@ The loop runner must not:
 
 - implement multiple major features in one run
 - make broad redesigns
+- prioritize internal state layering over visible workflow completion when a higher-value workflow increment is available
 - remove working functionality without approval
 - alter accounting logic without validating downstream effects
 - skip permission checks

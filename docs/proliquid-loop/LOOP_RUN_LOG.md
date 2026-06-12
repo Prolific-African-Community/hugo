@@ -6,6 +6,58 @@ This file records formal Proliquid loop runs used to review the operating model,
 
 ## Run Entries
 
+## Run 005
+
+### Run date
+
+2026-06-12
+
+### Run type
+
+Invoice Loop draft review traceability increment.
+
+### Documents reviewed
+
+- `LOOP_RUNNER.md`
+- `BACKLOG.md`
+- `LOOP_RUN_LOG.md`
+- `INVOICE_LOOP.md`
+- `ACCOUNTING_RULES.md`
+- `LOOP_IMPLEMENTATION_ROADMAP.md`
+
+### Main findings
+
+- The invoice workflow could already create a draft accounting transaction from a ready invoice candidate.
+- The remaining user-visible gap was not another workflow state. It was the lack of a clean way to move from the invoice workflow into reviewing the created draft.
+- The highest-value small increment was therefore traceability and navigation, not more internal workflow machinery.
+
+### Increment completed
+
+- Extended invoice candidate payloads to carry enough linked draft transaction context for review actions.
+- Added an `Open draft` action on invoice candidates whose accounting draft already exists.
+- After creating a draft from a ready invoice candidate, the workspace now moves directly into the Accounting tab.
+- The linked transaction is focused and visually highlighted in the Accounting transactions list.
+- Added a focused-draft indicator in the Accounting transactions section to make review orientation clearer.
+
+### Control decisions reinforced
+
+- No new autonomous accounting behavior was introduced.
+- No posting behavior was changed.
+- The increment improves reviewability of existing draft outputs rather than weakening any control gate.
+- Human review remains the required next step after draft creation.
+
+### Open questions
+
+- Should the next accounting review increment surface the linked draft journal entry as explicitly as the draft transaction?
+- Should invoice workflow users be able to jump directly into the journal lines view for the created draft, or is transaction-first review the better default?
+- What is the minimum approval path from draft accounting output to posting for invoice-originated transactions?
+
+### Recommended next focus area
+
+Recommended next focus area: invoice accounting review completion.
+
+The next smallest useful increment should let a reviewer move from the created draft transaction into a clearer accounting review outcome, ideally by exposing the linked draft journal entry and tightening the transition from draft review to controlled posting readiness without adding AI or new workflow states for their own sake.
+
 ## Run 004
 
 ### Run date

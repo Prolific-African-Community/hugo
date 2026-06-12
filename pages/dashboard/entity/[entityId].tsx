@@ -353,10 +353,12 @@ interface InvoiceCandidate {
     status: string;
     transaction?: {
       id: string;
+      date: string;
       type: string;
       amount: string;
       currency: string;
       status: string;
+      description?: string | null;
     } | null;
   } | null;
   counterparty?: Counterparty | null;
@@ -901,6 +903,7 @@ export default function EntityWorkspacePage() {
   const [creatingInvoiceCandidate, setCreatingInvoiceCandidate] = useState(false);
   const [activeInvoiceCandidateId, setActiveInvoiceCandidateId] =
     useState<string | null>(null);
+  const [focusedTransactionId, setFocusedTransactionId] = useState<string | null>(null);
   const [openingDocumentId, setOpeningDocumentId] = useState<string | null>(null);
   const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null);
   const [selectedInvoiceCandidateDocumentId, setSelectedInvoiceCandidateDocumentId] =
@@ -923,6 +926,19 @@ export default function EntityWorkspacePage() {
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    if (activeTab !== "accounting" || !focusedTransactionId) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      const row = window.document.getElementById(`transaction-${focusedTransactionId}`);
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 150);
+
+    return () => window.clearTimeout(timeout);
+  }, [activeTab, focusedTransactionId, transactions]);
 
   const request = async <T,>(url: string, options: RequestInit = {}) => {
     const token = localStorage.getItem("token");
@@ -1968,6 +1984,23 @@ export default function EntityWorkspacePage() {
     }
   };
 
+  const openDraftTransaction = (transaction: Transaction) => {
+    setTransactions((current) => {
+      const existing = current.find((item) => item.id === transaction.id);
+
+      if (existing) {
+        return current.map((item) =>
+          item.id === transaction.id ? { ...existing, ...transaction } : item
+        );
+      }
+
+      return [transaction, ...current].slice(0, 50);
+    });
+    setFocusedTransactionId(transaction.id);
+    setSuccess("Draft accounting transaction opened in the Accounting tab.");
+    selectTab("accounting");
+  };
+
   const handleCreateInvoiceCandidateAccountingDraft = async (
     candidate: InvoiceCandidate
   ) => {
@@ -1995,6 +2028,17 @@ export default function EntityWorkspacePage() {
       if (selectedInvoiceCandidateId === payload.candidate.id) {
         resetInvoiceCandidateEditor();
       }
+      setTransactions((current) => {
+        const existing = current.find((item) => item.id === payload.transaction.id);
+
+        if (existing) {
+          return current.map((item) =>
+            item.id === payload.transaction.id ? payload.transaction : item
+          );
+        }
+
+        return [payload.transaction, ...current].slice(0, 50);
+      });
       setDocuments((current) =>
         current.map((item) =>
           item.id === payload.candidate.documentId
@@ -2013,7 +2057,9 @@ export default function EntityWorkspacePage() {
 
       await loadEntityDetail();
 
+      setFocusedTransactionId(payload.transaction.id);
       setSuccess("Draft accounting transaction created from invoice candidate.");
+      selectTab("accounting");
     } catch (candidateError) {
       setError(
         candidateError instanceof Error
@@ -3277,9 +3323,16 @@ export default function EntityWorkspacePage() {
 
             <div className={cn(CARD, "overflow-hidden")}>
               <div className="border-b border-black/5 px-5 py-4">
-                <h2 className="text-xl font-semibold tracking-[-0.03em]">
-                  Transactions
-                </h2>
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <h2 className="text-xl font-semibold tracking-[-0.03em]">
+                    Transactions
+                  </h2>
+                  {focusedTransactionId && (
+                    <span className="rounded-full bg-blue-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-700">
+                      Focused draft transaction
+                    </span>
+                  )}
+                </div>
               </div>
               {!transactions.length ? (
                 <p className="px-5 py-10 text-sm font-medium text-black/45">
@@ -3299,7 +3352,15 @@ export default function EntityWorkspacePage() {
                     </thead>
                     <tbody className="divide-y divide-black/5">
                       {transactions.map((transaction) => (
-                        <tr className="transition hover:bg-black/[0.02]" key={transaction.id}>
+                        <tr
+                          id={`transaction-${transaction.id}`}
+                          className={cn(
+                            "transition hover:bg-black/[0.02]",
+                            focusedTransactionId === transaction.id &&
+                              "bg-blue-50/60 ring-1 ring-inset ring-blue-500/20"
+                          )}
+                          key={transaction.id}
+                        >
                           <td className="px-5 py-4 font-medium text-black/60">
                             {formatDate(transaction.date)}
                           </td>
@@ -4089,9 +4150,31 @@ export default function EntityWorkspacePage() {
                                       </button>
                                     </>
                                   ) : (
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
-                                      Draft created
-                                    </span>
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          candidate.document?.transaction &&
+                                          openDraftTransaction({
+                                            id: candidate.document.transaction.id,
+                                            date: candidate.document.transaction.date,
+                                            type: candidate.document.transaction.type,
+                                            amount: candidate.document.transaction.amount,
+                                            currency: candidate.document.transaction.currency,
+                                            status: candidate.document.transaction.status,
+                                            description:
+                                              candidate.document.transaction.description || undefined,
+                                            counterparty: candidate.counterparty || undefined,
+                                          })
+                                        }
+                                        className="rounded-full border border-emerald-500/20 bg-emerald-50 px-3 py-2 text-[10px] font-semibold text-emerald-700 transition hover:border-emerald-500 hover:bg-emerald-500 hover:text-white"
+                                      >
+                                        Open draft
+                                      </button>
+                                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
+                                        Draft created
+                                      </span>
+                                    </>
                                   )}
                                   {candidate.status !== "DRAFT" &&
                                   candidate.status !== "READY_FOR_ACCOUNTING_REVIEW" &&
