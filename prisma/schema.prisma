@@ -274,6 +274,13 @@ model Entity {
   documents               Document[]
   invoiceCandidates       InvoiceCandidate[]
   auditLogs               AuditLog[]
+  patients                Patient[]
+  prescriptions           Prescription[]
+  therapySessions         TherapySession[]
+  appointments            Appointment[]
+  invoices                Invoice[]
+  tasks                   Task[]
+  patientDocuments        PatientDocument[]
 
   @@index([organizationId])
   @@index([organizationId, isActive])
@@ -608,6 +615,8 @@ model AuditLog {
 }
 
 model Patient {
+  entityId         String
+  entity           Entity            @relation(fields: [entityId], references: [id], onDelete: Cascade)
   id               String            @id @default(cuid())
   firstName        String
   lastName         String
@@ -626,6 +635,9 @@ model Patient {
   tasks            Task[]
   patientDocuments PatientDocument[]
 
+  @@index([entityId])
+  @@index([entityId, status])
+  @@index([entityId, lastName, firstName])
   @@index([lastName, firstName])
   @@index([status])
   @@index([createdAt])
@@ -633,6 +645,8 @@ model Patient {
 
 model Prescription {
   id                 String             @id @default(cuid())
+  entityId           String
+  entity             Entity             @relation(fields: [entityId], references: [id], onDelete: Cascade)
   patientId          String
   patient            Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
   title              String
@@ -647,6 +661,8 @@ model Prescription {
   therapySessions    TherapySession[]
   invoices           Invoice[]
 
+  @@index([entityId])
+  @@index([entityId, status])
   @@index([patientId])
   @@index([patientId, status])
   @@index([startDate])
@@ -655,6 +671,8 @@ model Prescription {
 
 model TherapySession {
   id             String               @id @default(cuid())
+  entityId       String
+  entity         Entity               @relation(fields: [entityId], references: [id], onDelete: Cascade)
   patientId      String
   patient        Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
   prescriptionId String?
@@ -667,6 +685,9 @@ model TherapySession {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
+  @@index([entityId])
+  @@index([entityId, status])
+  @@index([entityId, scheduledAt])
   @@index([patientId])
   @@index([prescriptionId])
   @@index([scheduledAt])
@@ -674,6 +695,8 @@ model TherapySession {
 }
 
 model Appointment {
+  entityId  String
+  entity    Entity            @relation(fields: [entityId], references: [id], onDelete: Cascade)
   id        String            @id @default(cuid())
   patientId String
   patient   Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -684,6 +707,9 @@ model Appointment {
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
+  @@index([entityId])
+  @@index([entityId, startsAt])
+  @@index([entityId, status])
   @@index([patientId])
   @@index([startsAt])
   @@index([status])
@@ -691,6 +717,8 @@ model Appointment {
 
 model Invoice {
   id             String        @id @default(cuid())
+  entityId       String
+  entity         Entity        @relation(fields: [entityId], references: [id], onDelete: Cascade)
   patientId      String
   patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
   prescriptionId String?
@@ -706,6 +734,9 @@ model Invoice {
   updatedAt      DateTime      @updatedAt
 
   @@unique([invoiceNumber])
+  @@index([entityId])
+  @@index([entityId, status])
+  @@index([entityId, dueAt])
   @@index([patientId])
   @@index([prescriptionId])
   @@index([status])
@@ -715,6 +746,8 @@ model Invoice {
 
 model Task {
   id          String       @id @default(cuid())
+  entityId    String
+  entity      Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
   patientId   String?
   patient     Patient?     @relation(fields: [patientId], references: [id], onDelete: SetNull)
   title       String
@@ -725,6 +758,9 @@ model Task {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
+  @@index([entityId])
+  @@index([entityId, status])
+  @@index([entityId, dueAt])
   @@index([patientId])
   @@index([status])
   @@index([priority])
@@ -733,6 +769,8 @@ model Task {
 
 model PatientDocument {
   id               String   @id @default(cuid())
+  entityId         String
+  entity           Entity   @relation(fields: [entityId], references: [id], onDelete: Cascade)
   patientId        String
   patient          Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
   title            String
@@ -744,6 +782,8 @@ model PatientDocument {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  @@index([entityId])
+  @@index([entityId, createdAt])
   @@index([patientId])
   @@index([createdAt])
 }
