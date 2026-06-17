@@ -45,6 +45,7 @@ export default withAuth(async (req: AuthenticatedNextApiRequest, res: NextApiRes
         status: true,
         invoiceNumber: true,
         invoiceDate: true,
+        dueDate: true,
         currency: true,
         totalAmount: true,
         description: true,
@@ -123,6 +124,27 @@ export default withAuth(async (req: AuthenticatedNextApiRequest, res: NextApiRes
           isActive: true,
         },
         orderBy: { priority: "asc" },
+        select: {
+          id: true,
+          transactionType: true,
+          descriptionTemplate: true,
+          debitAccountId: true,
+          creditAccountId: true,
+          debitAccount: {
+            select: {
+              id: true,
+              code: true,
+              label: true,
+            },
+          },
+          creditAccount: {
+            select: {
+              id: true,
+              code: true,
+              label: true,
+            },
+          },
+        },
       })) ||
       (await prisma.accountingRule.findFirst({
         where: {
@@ -131,6 +153,27 @@ export default withAuth(async (req: AuthenticatedNextApiRequest, res: NextApiRes
           isActive: true,
         },
         orderBy: { priority: "asc" },
+        select: {
+          id: true,
+          transactionType: true,
+          descriptionTemplate: true,
+          debitAccountId: true,
+          creditAccountId: true,
+          debitAccount: {
+            select: {
+              id: true,
+              code: true,
+              label: true,
+            },
+          },
+          creditAccount: {
+            select: {
+              id: true,
+              code: true,
+              label: true,
+            },
+          },
+        },
       }));
 
     if (!rule) {
@@ -265,6 +308,22 @@ export default withAuth(async (req: AuthenticatedNextApiRequest, res: NextApiRes
           source: "invoice-candidate",
           invoiceCandidateId: candidate.id,
           documentId: candidate.document.id,
+          rule: {
+            id: rule.id,
+            transactionType: rule.transactionType,
+            descriptionTemplate: rule.descriptionTemplate,
+            debitAccount: rule.debitAccount,
+            creditAccount: rule.creditAccount,
+          },
+          proposalSummary: {
+            invoiceNumber: candidate.invoiceNumber,
+            invoiceDate: candidate.invoiceDate,
+            dueDate: candidate.dueDate,
+            candidateType: candidate.type,
+            counterpartyId:
+              candidate.counterpartyId || candidate.document.counterpartyId || null,
+            sourceDescription: description,
+          },
         },
       });
 

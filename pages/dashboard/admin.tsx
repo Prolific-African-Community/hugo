@@ -60,18 +60,14 @@ const BUTTON_DARK =
   "inline-flex items-center justify-center rounded-full bg-black px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-slate-800 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50";
 
 const ORGANIZATION_TYPES = [
-  "ASSET_MANAGER",
-  "GP",
-  "FIDUCIARY",
   "COMPANY",
-  "FAMILY_OFFICE",
   "OTHER",
 ];
 
 const initialForm = (): OrganizationForm => ({
   name: "",
   legalName: "",
-  type: "ASSET_MANAGER",
+  type: "COMPANY",
   country: "LU",
   baseCurrency: "EUR",
   maxUsers: "5",
@@ -87,7 +83,7 @@ function LogoMark() {
         <span className="h-6 w-3 rounded-[2px] bg-black" />
       </div>
       <span className="text-sm font-bold tracking-tight text-black">
-        Proliquid
+        Hugo
       </span>
     </div>
   );
@@ -490,7 +486,7 @@ export default function AdminConsolePage() {
                   onChange={(event) =>
                     setForm((current) => ({ ...current, name: event.target.value }))
                   }
-                  placeholder="Proliquid Advisory"
+                  placeholder="Cabinet Hugo"
                   className={INPUT}
                 />
               </label>
@@ -507,7 +503,7 @@ export default function AdminConsolePage() {
                       legalName: event.target.value,
                     }))
                   }
-                  placeholder="Proliquid Advisory S.à r.l."
+                  placeholder="Cabinet Hugo"
                   className={INPUT}
                 />
               </label>

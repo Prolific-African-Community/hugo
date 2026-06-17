@@ -36,7 +36,7 @@ export default function ChangePassword() {
           Change your password
         </h1>
         <p className="mb-6 text-sm font-medium leading-6 text-black/55">
-          Set a new password before entering your Proliquid workspace.
+          Set a new password before entering your Hugo workspace.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-6">

@@ -17,7 +17,7 @@ export default function LegacyAccountingRedirect() {
 
   useEffect(() => {
     if (!entityId) return;
-    router.replace(`/dashboard/entity/${entityId}?tab=accounting`);
+    router.replace(`/dashboard/entity/${entityId}`);
   }, [entityId, router]);
 
   return (
@@ -31,7 +31,7 @@ export default function LegacyAccountingRedirect() {
             Redirecting to the entity workspace
           </h1>
           <p className="mt-3 text-sm font-medium text-black/50">
-            Accounting now lives inside the entity workspace tabs.
+            This temporary route now opens the Hugo workspace.
           </p>
         </div>
       </div>

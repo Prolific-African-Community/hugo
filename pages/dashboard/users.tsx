@@ -100,7 +100,7 @@ const INTERNAL_ROLES = [
   "ORG_REVIEWER",
   "ORG_VIEWER",
 ];
-const CLIENT_ROLES = ["INVESTOR", "ENTITY_VIEWER"];
+const CLIENT_ROLES = ["ENTITY_VIEWER"];
 
 const initialInternalUserForm = (): InternalUserForm => ({
   email: "",
@@ -111,7 +111,7 @@ const initialInternalUserForm = (): InternalUserForm => ({
 const initialClientUserForm = (): ClientUserForm => ({
   email: "",
   temporaryPassword: "",
-  entityRole: "INVESTOR",
+  entityRole: "ENTITY_VIEWER",
   entityIds: [],
 });
 
@@ -123,7 +123,7 @@ function LogoMark() {
         <span className="h-6 w-3 rounded-[2px] bg-black" />
       </div>
       <span className="text-sm font-bold tracking-tight text-black">
-        Proliquid
+        Hugo
       </span>
     </div>
   );
@@ -555,7 +555,7 @@ export default function DashboardUsersPage() {
           />
           <KpiCard label="Remaining seats" value={remainingSeats} />
           <KpiCard
-            label="Client / investor users"
+            label="Clients"
             value={selectedOrganization?.clientUsersCount ?? usersPayload?.clientUsers?.length ?? "—"}
           />
         </section>
@@ -736,7 +736,7 @@ export default function DashboardUsersPage() {
               Client access
             </p>
             <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em]">
-              Create client / investor user
+              Create client user
             </h2>
 
             <form onSubmit={handleClientSubmit} className="mt-5 grid gap-4">
@@ -894,7 +894,7 @@ export default function DashboardUsersPage() {
                         colSpan={5}
                         className="px-4 py-8 text-center text-sm font-medium text-black/45"
                       >
-                        No client or investor users yet.
+                        No client users yet.
                       </td>
                     </tr>
                   )}

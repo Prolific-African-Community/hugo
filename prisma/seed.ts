@@ -16,9 +16,9 @@ const prisma = new PrismaClient();
 
 const ADMIN_EMAIL = 'admin@proliquid.local';
 const ADMIN_PASSWORD = 'Admin123!';
-const ORGANIZATION_NAME = 'Proliquid Demo Organization';
-const ENTITY_NAME = 'Proliquid Demo Entity';
-const TEMPLATE_NAME = 'Luxembourg PCN Starter Template';
+const ORGANIZATION_NAME = 'Hugo Demo Cabinet';
+const ENTITY_NAME = 'Hugo Demo Workspace';
+const TEMPLATE_NAME = 'Legacy Starter Template';
 const TEMPLATE_VERSION = '1.0.0';
 
 const accounts = [

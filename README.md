@@ -1,21 +1,20 @@
-# Proliquid
+# Hugo
 
-Proliquid is an entity-first accounting and financial operations platform for multi-tenant organizations.
+Hugo is being cleaned into a sober cockpit for a digital assistant experience.
 
 ## Current product scope
 
 The active application centers on:
 
-- organization administration
-- entity workspaces
+- cabinet administration
+- workspaces
 - role-based internal and client access
-- accounting setup and templates
-- business transactions and journal entries
+- documents
+- tasks and follow-up surfaces
 - document upload and secure private download
-- reporting
 - audit logging
 
-The active product model is organization-first and entity-first, including operational support for fund-type entities where needed.
+The current cleanup keeps the existing technical base stable while removing visible legacy product language.
 
 ## Environment
 

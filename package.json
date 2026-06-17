@@ -7,9 +7,7 @@
     "start": "next start",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:deploy": "prisma migrate deploy",
-    "accounting:normalize-lux-pcn": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/normalize-luxembourg-pcn-csv.ts",
-    "accounting:import-lux-pcn": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/import-luxembourg-pcn-template.ts"
+    "prisma:deploy": "prisma migrate deploy"
   },
   "prisma": {
     "seed": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts"

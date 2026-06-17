@@ -12,7 +12,7 @@ function LogoMark() {
         <span className="h-6 w-3 rounded-[2px] bg-black" />
       </div>
       <span className="text-sm font-bold tracking-tight text-black">
-        Proliquid
+        Hugo
       </span>
     </div>
   );
@@ -33,14 +33,14 @@ function LoginVisual() {
         </h2>
 
         <p className="mt-6 max-w-sm text-sm font-medium leading-7 text-white/50">
-          Access your investment dashboard, reporting documents, investor
-          records and operational workflows from one controlled environment.
+          Accedez au cockpit du cabinet, aux documents, aux clients et aux
+          taches de suivi depuis un espace sobre et controle.
         </p>
       </div>
 
       <div className="absolute bottom-12 left-10 right-10 z-10 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 backdrop-blur">
         <div className="flex items-center justify-between text-xs text-white/50">
-          <span>Portfolio visibility</span>
+          <span>Cabinet visibility</span>
           <span className="text-blue-300">Live</span>
         </div>
 
@@ -157,16 +157,16 @@ export default function LoginPage() {
 
               <div className="mt-16">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-500">
-                  Investment platform
+                  Cockpit cabinet
                 </p>
 
                 <h1 className="mt-4 max-w-sm text-[2.6rem] font-bold leading-[0.98] tracking-[-0.05em] text-black md:text-[3.6rem]">
-                  Sign in to Proliquid
+                  Se connecter a Hugo
                 </h1>
 
                 <p className="mt-6 max-w-sm text-sm font-medium leading-7 text-black/60">
-                  Access your financial administration workspace, investor
-                  records, reporting documents and operational workflows.
+                  Accedez a votre espace cabinet, vos clients, vos documents et
+                  vos taches de suivi.
                 </p>
               </div>
 
@@ -210,13 +210,13 @@ export default function LoginPage() {
                   disabled={isSubmitting}
                   className="flex w-full items-center justify-center rounded-full bg-blue-500 px-6 py-4 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-blue-600 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSubmitting ? "Signing in..." : "Sign in ↗"}
+                  {isSubmitting ? "Connexion..." : "Se connecter"}
                 </button>
               </form>
 
               <div className="mt-8 flex flex-wrap items-center justify-between gap-4 text-xs font-medium text-black/45">
-                <span>Secure controlled access</span>
-                <span>Audit-ready environment</span>
+                <span>Acces securise</span>
+                <span>Suivi clair</span>
               </div>
             </div>
           </section>

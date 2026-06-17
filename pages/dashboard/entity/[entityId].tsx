@@ -184,6 +184,79 @@ interface JournalEntry {
   status: "DRAFT" | "POSTED" | "REVERSED";
   postedAt?: string | null;
   lines: JournalLine[];
+  transaction?: {
+    id: string;
+    type: string;
+    amount: string;
+    currency: string;
+    status: string;
+    description?: string | null;
+  } | null;
+  reviewContext?: {
+    source: string;
+    sourceDocument: {
+      id: string;
+      title?: string | null;
+      originalFilename?: string | null;
+      type: string;
+      status: string;
+    };
+    invoiceCandidate: {
+      id: string;
+      status: string;
+      type: string;
+      invoiceNumber?: string | null;
+      invoiceDate: string;
+      dueDate?: string | null;
+      currency: string;
+      subtotal?: string | null;
+      vatAmount?: string | null;
+      totalAmount: string;
+      description?: string | null;
+      counterparty?: Counterparty | null;
+    };
+    transaction: {
+      id: string;
+      type: string;
+      amount: string;
+      currency: string;
+      status: string;
+      description?: string | null;
+    };
+    ruleUsed: {
+      id?: string | null;
+      transactionType: string;
+      descriptionTemplate?: string | null;
+      debitAccount: {
+        id?: string | null;
+        code?: string | null;
+        label?: string | null;
+      };
+      creditAccount: {
+        id?: string | null;
+        code?: string | null;
+        label?: string | null;
+      };
+    };
+    proposalLines: {
+      id: string;
+      type: "DEBIT" | "CREDIT";
+      accountCode?: string | null;
+      accountLabel?: string | null;
+      amount: string;
+      currency: string;
+      explanation: string;
+    }[];
+    readiness: {
+      readyToPost: boolean;
+      indicators: {
+        label: string;
+        ready: boolean;
+        detail: string;
+      }[];
+    };
+    warnings: string[];
+  } | null;
 }
 
 interface Transaction {
@@ -500,13 +573,7 @@ const RULE_TRANSACTION_TYPES = [
 ];
 const TABS: { id: WorkspaceTab; label: string }[] = [
   { id: "overview", label: "Overview" },
-  { id: "projects", label: "Projects" },
-  { id: "accounting", label: "Accounting" },
-  { id: "journal", label: "Journal" },
-  { id: "counterparties", label: "Counterparties" },
   { id: "documents", label: "Documents" },
-  { id: "reporting", label: "Reporting" },
-  { id: "setup", label: "Setup" },
   { id: "audit", label: "Audit" },
 ];
 const SETUP_TABS: { id: SetupSubTab; label: string }[] = [
@@ -604,7 +671,7 @@ function LogoMark() {
         <span className="h-6 w-3 rounded-[2px] bg-black" />
       </div>
       <span className="text-sm font-bold tracking-tight text-black">
-        Proliquid
+        Hugo
       </span>
     </div>
   );
@@ -746,11 +813,11 @@ function invoiceCandidateStatusClass(status: string) {
 
 function invoiceCandidateStatusLabel(status: string) {
   if (status === "ACCOUNTING_DRAFT_CREATED") {
-    return "Accounting draft created";
+    return "Prepared";
   }
 
   if (status === "READY_FOR_ACCOUNTING_REVIEW") {
-    return "Ready for accounting review";
+    return "Ready";
   }
 
   return "Draft";
@@ -2441,7 +2508,7 @@ export default function EntityWorkspacePage() {
         <div className="mx-auto max-w-3xl">
           <div className={cn(CARD, "p-8 text-center")}>
             <h1 className="text-2xl font-bold tracking-[-0.04em]">
-              Entity workspace unavailable
+                Workspace unavailable
             </h1>
             <p className="mt-3 text-sm font-medium text-black/50">
               This entity could not be loaded with the current session.
@@ -2493,20 +2560,17 @@ export default function EntityWorkspacePage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Entity workspace
+                Cabinet workspace
               </p>
               <h1 className="mt-3 text-3xl font-bold tracking-[-0.04em]">
                 {entityDetail.entity.name}
               </h1>
               <div className="mt-4 flex flex-wrap gap-2">
                 <span className="rounded-full bg-black px-3 py-1.5 text-[10px] font-semibold tracking-[0.12em] text-white">
-                  {entityDetail.entity.type}
+                  Cabinet
                 </span>
                 <span className="rounded-full bg-[#f4f4f7] px-3 py-1.5 text-[10px] font-semibold tracking-[0.12em] text-black/55">
                   {entityDetail.entity.baseCurrency}
-                </span>
-                <span className="rounded-full bg-[#f4f4f7] px-3 py-1.5 text-[10px] font-semibold tracking-[0.12em] text-black/55">
-                  {entityDetail.entity.accountingStandard}
                 </span>
                 <span className="rounded-full bg-[#f4f4f7] px-3 py-1.5 text-[10px] font-semibold tracking-[0.12em] text-black/55">
                   {entityDetail.entity.country}
@@ -2544,11 +2608,11 @@ export default function EntityWorkspacePage() {
         )}
 
         <section className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-          <KpiCard label="Projects" value={kpis.projects} accent />
-          <KpiCard label="Transactions" value={kpis.transactions} />
-          <KpiCard label="Draft entries" value={kpis.draftEntries} />
-          <KpiCard label="Posted entries" value={kpis.postedEntries} />
-          <KpiCard label="Counterparties" value={kpis.counterparties} />
+          <KpiCard label="Rendez-vous" value={0} accent />
+          <KpiCard label="Clients" value={kpis.counterparties} />
+          <KpiCard label="Taches" value={0} />
+          <KpiCard label="Suivi" value={kpis.transactions} />
+          <KpiCard label="Factures" value={0} />
           <KpiCard label="Documents" value={kpis.documents} />
         </section>
 
@@ -2574,172 +2638,79 @@ export default function EntityWorkspacePage() {
           <section className="mt-4 grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
             <div className={cn(CARD, "p-5")}>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Quick actions
+                Cockpit
               </p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {entityDetail.permissions.canCreateAccountingTransaction && (
-                <button
-                  type="button"
-                  onClick={() => selectTab("accounting")}
-                  className={cn(SUBCARD, "px-4 py-4 text-left transition hover:bg-white")}
-                >
-                  <p className="text-sm font-semibold">New transaction</p>
-                  <p className="mt-1 text-xs font-medium text-black/45">
-                    Create a draft journal flow
-                  </p>
-                </button>
-                )}
-                {entityDetail.permissions.canManageEntity && (
-                <button
-                  type="button"
-                  onClick={() => selectTab("projects")}
-                  className={cn(SUBCARD, "px-4 py-4 text-left transition hover:bg-white")}
-                >
-                  <p className="text-sm font-semibold">Add project</p>
-                  <p className="mt-1 text-xs font-medium text-black/45">
-                    Extend the entity workspace
-                  </p>
-                </button>
-                )}
-                {entityDetail.permissions.canManageCounterparties && (
-                <button
-                  type="button"
-                  onClick={() => selectTab("counterparties")}
-                  className={cn(SUBCARD, "px-4 py-4 text-left transition hover:bg-white")}
-                >
-                  <p className="text-sm font-semibold">Add counterparty</p>
-                  <p className="mt-1 text-xs font-medium text-black/45">
-                    Keep relationships operational
-                  </p>
-                </button>
-                )}
-                {entityDetail.permissions.canManageDocuments && (
+              <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em]">
+                Vue temporaire du cabinet
+              </h2>
+              <p className="mt-3 text-sm font-medium leading-6 text-black/55">
+                Les modules metier Hugo seront ajoutes dans une phase separee.
+                Pour le moment, cette page garde uniquement les informations
+                stables, les documents et l'audit.
+              </p>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => selectTab("documents")}
                   className={cn(SUBCARD, "px-4 py-4 text-left transition hover:bg-white")}
                 >
-                  <p className="text-sm font-semibold">Add document</p>
+                  <p className="text-sm font-semibold">Documents</p>
                   <p className="mt-1 text-xs font-medium text-black/45">
-                    Link evidence to operations
+                    Ajouter et consulter les pieces du cabinet.
                   </p>
                 </button>
-                )}
-                {entityDetail.permissions.canViewReports && (
                 <button
                   type="button"
-                  onClick={() => selectTab("reporting")}
-                  className={cn(SUBCARD, "px-4 py-4 text-left transition hover:bg-white sm:col-span-2")}
+                  onClick={() => selectTab("audit")}
+                  className={cn(SUBCARD, "px-4 py-4 text-left transition hover:bg-white")}
                 >
-                  <p className="text-sm font-semibold">View reporting</p>
+                  <p className="text-sm font-semibold">Audit</p>
                   <p className="mt-1 text-xs font-medium text-black/45">
-                    Trial balance and general ledger
+                    Garder une trace claire des actions importantes.
                   </p>
                 </button>
-                )}
               </div>
             </div>
 
             <div className="grid gap-4">
-              <div className={cn(CARD, "overflow-hidden")}>
-                <div className="border-b border-black/5 px-5 py-4">
-                  <h2 className="text-lg font-semibold tracking-[-0.03em]">
-                    Recent transactions
-                  </h2>
-                </div>
-                {!recentTransactions.length ? (
-                  <p className="px-5 py-8 text-sm font-medium text-black/45">
-                    No transactions yet.
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-left text-sm">
-                      <thead className="bg-[#f7f7f9] text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
-                        <tr>
-                          <th className="px-5 py-3">Date</th>
-                          <th className="px-4 py-3">Type</th>
-                          <th className="px-4 py-3 text-right">Amount</th>
-                          <th className="px-5 py-3">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-black/5">
-                        {recentTransactions.map((transaction) => (
-                          <tr className="transition hover:bg-black/[0.02]" key={transaction.id}>
-                            <td className="px-5 py-4 font-medium text-black/60">
-                              {formatDate(transaction.date)}
-                            </td>
-                            <td className="px-4 py-4 font-semibold text-black/80">
-                              {transaction.type}
-                            </td>
-                            <td className="px-4 py-4 text-right font-mono text-xs font-bold">
-                              {formatAmount(
-                                transaction.amount,
-                                transaction.currency
-                              )}
-                            </td>
-                            <td className="px-5 py-4">
-                              <span
-                                className={cn(
-                                  "rounded-full px-3 py-2 text-[10px] font-semibold tracking-[0.12em]",
-                                  statusClass(transaction.status)
-                                )}
-                              >
-                                {transaction.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              <div className={cn(CARD, "p-5")}>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
+                  Suivi
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className={cn(SUBCARD, "p-4")}>
+                    <p className="text-xs font-semibold text-black/45">
+                      Rendez-vous
+                    </p>
+                    <p className="mt-3 text-3xl font-bold tracking-[-0.04em]">
+                      0
+                    </p>
                   </div>
-                )}
+                  <div className={cn(SUBCARD, "p-4")}>
+                    <p className="text-xs font-semibold text-black/45">Taches</p>
+                    <p className="mt-3 text-3xl font-bold tracking-[-0.04em]">
+                      0
+                    </p>
+                  </div>
+                  <div className={cn(SUBCARD, "p-4")}>
+                    <p className="text-xs font-semibold text-black/45">
+                      Documents
+                    </p>
+                    <p className="mt-3 text-3xl font-bold tracking-[-0.04em]">
+                      {entityDetail.summary.documentsCount}
+                    </p>
+                  </div>
+                </div>
               </div>
 
-              <div className={cn(CARD, "overflow-hidden")}>
-                <div className="border-b border-black/5 px-5 py-4">
-                  <h2 className="text-lg font-semibold tracking-[-0.03em]">
-                    Recent journal entries
-                  </h2>
-                </div>
-                {!recentJournalEntries.length ? (
-                  <p className="px-5 py-8 text-sm font-medium text-black/45">
-                    No journal entries yet.
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-left text-sm">
-                      <thead className="bg-[#f7f7f9] text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
-                        <tr>
-                          <th className="px-5 py-3">Date</th>
-                          <th className="px-4 py-3">Description</th>
-                          <th className="px-5 py-3">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-black/5">
-                        {recentJournalEntries.map((entry) => (
-                          <tr className="transition hover:bg-black/[0.02]" key={entry.id}>
-                            <td className="px-5 py-4 font-medium text-black/60">
-                              {formatDate(entry.date)}
-                            </td>
-                            <td className="px-4 py-4 font-semibold text-black/80">
-                              {entry.description}
-                            </td>
-                            <td className="px-5 py-4">
-                              <span
-                                className={cn(
-                                  "rounded-full px-3 py-2 text-[10px] font-semibold tracking-[0.12em]",
-                                  statusClass(entry.status)
-                                )}
-                              >
-                                {entry.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+              <div className={cn(CARD, "p-5")}>
+                <h2 className="text-lg font-semibold tracking-[-0.03em]">
+                  Base conservee
+                </h2>
+                <p className="mt-3 text-sm font-medium leading-6 text-black/50">
+                  Les donnees existantes restent disponibles derriere
+                  l'interface pour eviter toute casse pendant le nettoyage.
+                </p>
               </div>
             </div>
           </section>
@@ -3606,6 +3577,240 @@ export default function EntityWorkspacePage() {
                           {isExpanded && (
                             <tr>
                               <td colSpan={7} className="bg-[#f7f7f9] px-5 py-4">
+                                <div className="space-y-4">
+                                  {entry.reviewContext && (
+                                    <div className="rounded-2xl border border-black/5 bg-white p-5">
+                                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                        <div>
+                                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
+                                            Invoice-originated proposal
+                                          </p>
+                                          <h3 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-black">
+                                            {entry.reviewContext.transaction.type}
+                                          </h3>
+                                          <p className="mt-1 text-sm font-medium text-black/55">
+                                            {entry.reviewContext.transaction.description ||
+                                              entry.reviewContext.invoiceCandidate.description ||
+                                              "Manual invoice-originated accounting draft"}
+                                          </p>
+                                        </div>
+                                        <span
+                                          className={cn(
+                                            "rounded-full px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.12em]",
+                                            entry.reviewContext.readiness.readyToPost
+                                              ? "bg-emerald-50 text-emerald-700"
+                                              : "bg-amber-50 text-amber-700"
+                                          )}
+                                        >
+                                          {entry.reviewContext.readiness.readyToPost
+                                            ? "Ready for posting review"
+                                            : "Manual review required"}
+                                        </span>
+                                      </div>
+
+                                      <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+                                        <div className="space-y-4">
+                                          <div className="rounded-2xl border border-black/5 bg-[#f7f7f9] p-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+                                              Source
+                                            </p>
+                                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                              <div>
+                                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-black/40">
+                                                  Document
+                                                </p>
+                                                <p className="mt-1 text-sm font-semibold text-black/80">
+                                                  {entry.reviewContext.sourceDocument.title ||
+                                                    entry.reviewContext.sourceDocument.originalFilename ||
+                                                    "Reviewed invoice document"}
+                                                </p>
+                                                <p className="mt-1 text-xs font-medium text-black/50">
+                                                  {entry.reviewContext.sourceDocument.type} ·{" "}
+                                                  {entry.reviewContext.sourceDocument.status}
+                                                </p>
+                                              </div>
+                                              <div>
+                                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-black/40">
+                                                  Invoice candidate
+                                                </p>
+                                                <p className="mt-1 text-sm font-semibold text-black/80">
+                                                  {entry.reviewContext.invoiceCandidate.invoiceNumber ||
+                                                    "No invoice number captured"}
+                                                </p>
+                                                <p className="mt-1 text-xs font-medium text-black/50">
+                                                  {formatDate(
+                                                    entry.reviewContext.invoiceCandidate.invoiceDate
+                                                  )}{" "}
+                                                  ·{" "}
+                                                  {entry.reviewContext.invoiceCandidate.counterparty
+                                                    ?.name || "Counterparty missing"}
+                                                </p>
+                                              </div>
+                                            </div>
+                                          </div>
+
+                                          <div className="rounded-2xl border border-black/5 bg-[#f7f7f9] p-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+                                              Rule used
+                                            </p>
+                                            <p className="mt-3 text-sm font-semibold text-black/80">
+                                              {entry.reviewContext.ruleUsed.transactionType}
+                                            </p>
+                                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                              <div className="rounded-2xl border border-black/5 bg-white p-3">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-black/40">
+                                                  Debit account
+                                                </p>
+                                                <p className="mt-1 font-mono text-sm font-bold text-black">
+                                                  {entry.reviewContext.ruleUsed.debitAccount.code ||
+                                                    "—"}
+                                                </p>
+                                                <p className="mt-1 text-sm font-medium text-black/65">
+                                                  {entry.reviewContext.ruleUsed.debitAccount.label ||
+                                                    "Manual review required"}
+                                                </p>
+                                              </div>
+                                              <div className="rounded-2xl border border-black/5 bg-white p-3">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-black/40">
+                                                  Credit account
+                                                </p>
+                                                <p className="mt-1 font-mono text-sm font-bold text-black">
+                                                  {entry.reviewContext.ruleUsed.creditAccount.code ||
+                                                    "—"}
+                                                </p>
+                                                <p className="mt-1 text-sm font-medium text-black/65">
+                                                  {entry.reviewContext.ruleUsed.creditAccount.label ||
+                                                    "Manual review required"}
+                                                </p>
+                                              </div>
+                                            </div>
+                                          </div>
+
+                                          <div className="rounded-2xl border border-black/5 bg-[#f7f7f9] p-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+                                              Journal proposal
+                                            </p>
+                                            <div className="mt-3 space-y-3">
+                                              {entry.reviewContext.proposalLines.map((line) => (
+                                                <div
+                                                  key={line.id}
+                                                  className="rounded-2xl border border-black/5 bg-white px-4 py-3"
+                                                >
+                                                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                                    <div>
+                                                      <p className="text-sm font-semibold text-black/85">
+                                                        {line.type === "DEBIT" ? "Dr" : "Cr"}{" "}
+                                                        {line.accountCode || "—"}{" "}
+                                                        {line.accountLabel || "Manual review required"}
+                                                      </p>
+                                                      <p className="mt-1 text-sm font-medium text-black/55">
+                                                        {line.explanation}
+                                                      </p>
+                                                    </div>
+                                                    <p className="font-mono text-sm font-bold text-black">
+                                                      {formatAmount(line.amount, line.currency)}
+                                                    </p>
+                                                  </div>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                          <div className="rounded-2xl border border-black/5 bg-[#f7f7f9] p-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+                                              Proposal summary
+                                            </p>
+                                            <dl className="mt-3 space-y-3 text-sm">
+                                              <div className="flex items-start justify-between gap-4">
+                                                <dt className="font-medium text-black/50">Amount</dt>
+                                                <dd className="font-semibold text-black/80">
+                                                  {formatAmount(
+                                                    entry.reviewContext.invoiceCandidate.totalAmount,
+                                                    entry.reviewContext.invoiceCandidate.currency
+                                                  )}
+                                                </dd>
+                                              </div>
+                                              <div className="flex items-start justify-between gap-4">
+                                                <dt className="font-medium text-black/50">Counterparty</dt>
+                                                <dd className="text-right font-semibold text-black/80">
+                                                  {entry.reviewContext.invoiceCandidate.counterparty
+                                                    ?.name || "—"}
+                                                </dd>
+                                              </div>
+                                              <div className="flex items-start justify-between gap-4">
+                                                <dt className="font-medium text-black/50">Candidate status</dt>
+                                                <dd className="text-right font-semibold text-black/80">
+                                                  {entry.reviewContext.invoiceCandidate.status}
+                                                </dd>
+                                              </div>
+                                              <div className="flex items-start justify-between gap-4">
+                                                <dt className="font-medium text-black/50">VAT amount</dt>
+                                                <dd className="text-right font-semibold text-black/80">
+                                                  {entry.reviewContext.invoiceCandidate.vatAmount
+                                                    ? formatAmount(
+                                                        entry.reviewContext.invoiceCandidate.vatAmount,
+                                                        entry.reviewContext.invoiceCandidate.currency
+                                                      )
+                                                    : "Not captured"}
+                                                </dd>
+                                              </div>
+                                            </dl>
+                                          </div>
+
+                                          <div className="rounded-2xl border border-black/5 bg-[#f7f7f9] p-4">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+                                              Posting readiness
+                                            </p>
+                                            <div className="mt-3 space-y-2">
+                                              {entry.reviewContext.readiness.indicators.map(
+                                                (indicator) => (
+                                                  <div
+                                                    key={indicator.label}
+                                                    className="rounded-2xl border border-black/5 bg-white px-4 py-3"
+                                                  >
+                                                    <div className="flex items-center justify-between gap-3">
+                                                      <p className="text-sm font-semibold text-black/80">
+                                                        {indicator.label}
+                                                      </p>
+                                                      <span
+                                                        className={cn(
+                                                          "rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]",
+                                                          indicator.ready
+                                                            ? "bg-emerald-50 text-emerald-700"
+                                                            : "bg-amber-50 text-amber-700"
+                                                        )}
+                                                      >
+                                                        {indicator.ready ? "Ready" : "Review"}
+                                                      </span>
+                                                    </div>
+                                                    <p className="mt-1 text-sm font-medium text-black/55">
+                                                      {indicator.detail}
+                                                    </p>
+                                                  </div>
+                                                )
+                                              )}
+                                            </div>
+                                          </div>
+
+                                          {!!entry.reviewContext.warnings.length && (
+                                            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-700">
+                                                Accounting warnings
+                                              </p>
+                                              <ul className="mt-3 space-y-2 text-sm font-medium text-amber-900/80">
+                                                {entry.reviewContext.warnings.map((warning) => (
+                                                  <li key={warning}>• {warning}</li>
+                                                ))}
+                                              </ul>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+
                                 <div className="overflow-hidden rounded-2xl border border-black/5 bg-white">
                                   <table className="min-w-full text-left text-xs">
                                     <thead className="bg-black text-[10px] font-semibold uppercase tracking-[0.12em] text-white/60">
@@ -3643,6 +3848,7 @@ export default function EntityWorkspacePage() {
                                       ))}
                                     </tbody>
                                   </table>
+                                </div>
                                 </div>
                               </td>
                             </tr>
@@ -3886,14 +4092,14 @@ export default function EntityWorkspacePage() {
                         title: event.target.value,
                       }))
                     }
-                    placeholder="Supplier invoice January 2026"
+                    placeholder="Document janvier 2026"
                     className={INPUT}
                   />
                 </label>
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Counterparty <span className="text-black/30">optional</span>
+                    Client <span className="text-black/30">optional</span>
                   </span>
                   <select
                     value={documentForm.counterpartyId}
@@ -3905,7 +4111,7 @@ export default function EntityWorkspacePage() {
                     }
                     className={INPUT}
                   >
-                    <option value="">No counterparty</option>
+                    <option value="">No client</option>
                     {counterparties.map((counterparty) => (
                       <option key={counterparty.id} value={counterparty.id}>
                         {counterparty.name} — {counterparty.type}
@@ -3916,7 +4122,7 @@ export default function EntityWorkspacePage() {
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Transaction <span className="text-black/30">optional</span>
+                    Suivi <span className="text-black/30">optional</span>
                   </span>
                   <select
                     value={documentForm.transactionId}
@@ -3928,7 +4134,7 @@ export default function EntityWorkspacePage() {
                     }
                     className={INPUT}
                   >
-                    <option value="">No transaction</option>
+                    <option value="">No follow-up item</option>
                     {transactions.map((transaction) => (
                       <option key={transaction.id} value={transaction.id}>
                         {transaction.type} —{" "}
@@ -3972,13 +4178,13 @@ export default function EntityWorkspacePage() {
                 <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                      Operational queue
+                      Document follow-up
                     </p>
                     <h3 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-black">
-                      Review Queue
+                      Documents to review
                     </h3>
                     <p className="mt-1 text-sm font-medium text-black/45">
-                      Documents grouped by review status for faster operational follow-up.
+                      Documents grouped by status for faster cabinet follow-up.
                     </p>
                   </div>
                   {!entityDetail.permissions.canManageDocuments && (
@@ -4092,7 +4298,7 @@ export default function EntityWorkspacePage() {
                                         onClick={() => startInvoiceCandidate(document)}
                                         className="rounded-full border border-blue-500/20 bg-blue-50 px-3 py-2 text-[10px] font-semibold text-blue-700 transition hover:border-blue-500 hover:bg-blue-500 hover:text-white"
                                       >
-                                        Create candidate
+                                        Prepare invoice
                                       </button>
                                     )}
                                 </div>
@@ -4109,13 +4315,13 @@ export default function EntityWorkspacePage() {
                 <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                      Invoice loop
+                      Factures
                     </p>
                     <h3 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-black">
-                      Invoice Candidates
+                      Factures a preparer
                     </h3>
                     <p className="mt-1 text-sm font-medium text-black/45">
-                      Structured draft invoices created from reviewed documents.
+                      Elements de facture prepares a partir des documents relus.
                     </p>
                   </div>
                   <span className="rounded-full bg-slate-100 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
@@ -4125,14 +4331,14 @@ export default function EntityWorkspacePage() {
 
                 {!invoiceCandidates.length ? (
                   <p className="mt-5 text-sm font-medium text-black/45">
-                    No invoice candidates yet.
+                    No invoices to prepare yet.
                   </p>
                 ) : (
                   <div className="mt-5 overflow-x-auto">
                     <table className="min-w-full text-left text-sm">
                       <thead className="bg-[#f7f7f9] text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
                         <tr>
-                          <th className="px-4 py-3">Invoice date</th>
+                          <th className="px-4 py-3">Date</th>
                           <th className="px-4 py-3">Document</th>
                           <th className="px-4 py-3">Type</th>
                           <th className="px-4 py-3">Counterparty</th>
@@ -4221,7 +4427,7 @@ export default function EntityWorkspacePage() {
                                         {creatingInvoiceCandidate &&
                                         activeInvoiceCandidateId === candidate.id
                                           ? "Creating..."
-                                          : "Create draft"}
+                                          : "Prepare"}
                                       </button>
                                       <button
                                         type="button"
@@ -4257,7 +4463,7 @@ export default function EntityWorkspacePage() {
                                         }
                                         className="rounded-full border border-emerald-500/20 bg-emerald-50 px-3 py-2 text-[10px] font-semibold text-emerald-700 transition hover:border-emerald-500 hover:bg-emerald-500 hover:text-white"
                                       >
-                                        Open draft
+                                        Open follow-up
                                       </button>
                                       <button
                                         type="button"
@@ -4271,10 +4477,10 @@ export default function EntityWorkspacePage() {
                                         {creatingInvoiceCandidate &&
                                         activeInvoiceCandidateId === candidate.id
                                           ? "Opening..."
-                                          : "Open journal"}
+                                          : "Open task"}
                                       </button>
                                       <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
-                                        Draft created
+                                        Prepared
                                       </span>
                                     </>
                                   )}
@@ -4314,8 +4520,8 @@ export default function EntityWorkspacePage() {
                         <th className="px-4 py-3">Status</th>
                         <th className="px-4 py-3">File</th>
                         <th className="px-4 py-3">Size</th>
-                        <th className="px-4 py-3">Counterparty</th>
-                        <th className="px-4 py-3">Transaction</th>
+                        <th className="px-4 py-3">Client</th>
+                        <th className="px-4 py-3">Suivi</th>
                         <th className="px-5 py-3 text-right">Action</th>
                       </tr>
                     </thead>
@@ -4810,7 +5016,7 @@ export default function EntityWorkspacePage() {
                     Apply a controlled template
                   </h3>
                   <p className="mt-2 max-w-2xl text-sm font-medium leading-6 text-black/55">
-                    Start from a Proliquid-managed accounting baseline, then keep
+                    Start from a legacy operational baseline, then keep
                     managing entity-specific accounts and rules below.
                   </p>
                 </div>
@@ -5489,7 +5695,7 @@ export default function EntityWorkspacePage() {
 
             <div className={cn(CARD, "p-5")}>
               <p className="text-sm font-medium text-black/45">
-                Full Luxembourg PCN template import will be added in a later
+                Full legacy template import will be added in a later
                 step.
               </p>
             </div>
