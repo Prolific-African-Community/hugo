@@ -141,6 +141,55 @@ enum DocumentType {
   OTHER
 }
 
+enum PatientStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum PrescriptionStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+enum TherapySessionStatus {
+  PLANNED
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  MISSED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  READY
+  ISSUED
+  PAID
+  CANCELLED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
 model User {
   id                          String                @id @default(cuid())
   email                       String                @unique
@@ -556,4 +605,145 @@ model AuditLog {
   @@index([resourceType])
   @@index([action])
   @@index([entityType, entityRecordId, action])
+}
+
+model Patient {
+  id               String            @id @default(cuid())
+  firstName        String
+  lastName         String
+  email            String?
+  phone            String?
+  address          String?
+  cnsNumber        String?
+  status           PatientStatus     @default(ACTIVE)
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  prescriptions    Prescription[]
+  therapySessions  TherapySession[]
+  appointments     Appointment[]
+  invoices         Invoice[]
+  tasks            Task[]
+  patientDocuments PatientDocument[]
+
+  @@index([lastName, firstName])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Prescription {
+  id                 String             @id @default(cuid())
+  patientId          String
+  patient            Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  title              String
+  prescribedSessions Int
+  completedSessions  Int                @default(0)
+  startDate          DateTime?
+  endDate            DateTime?
+  status             PrescriptionStatus @default(ACTIVE)
+  notes              String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  therapySessions    TherapySession[]
+  invoices           Invoice[]
+
+  @@index([patientId])
+  @@index([patientId, status])
+  @@index([startDate])
+  @@index([endDate])
+}
+
+model TherapySession {
+  id             String               @id @default(cuid())
+  patientId      String
+  patient        Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  prescriptionId String?
+  prescription   Prescription?        @relation(fields: [prescriptionId], references: [id], onDelete: SetNull)
+  sessionNumber  Int
+  scheduledAt    DateTime?
+  completedAt    DateTime?
+  status         TherapySessionStatus @default(PLANNED)
+  notes          String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([patientId])
+  @@index([prescriptionId])
+  @@index([scheduledAt])
+  @@index([status])
+}
+
+model Appointment {
+  id        String            @id @default(cuid())
+  patientId String
+  patient   Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  endsAt    DateTime
+  status    AppointmentStatus @default(SCHEDULED)
+  notes     String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@index([patientId])
+  @@index([startsAt])
+  @@index([status])
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  patientId      String
+  patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  prescriptionId String?
+  prescription   Prescription? @relation(fields: [prescriptionId], references: [id], onDelete: SetNull)
+  invoiceNumber  String?
+  status         InvoiceStatus @default(DRAFT)
+  amountCents    Int           @default(0)
+  currency       String        @default("EUR")
+  issuedAt       DateTime?
+  dueAt          DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([invoiceNumber])
+  @@index([patientId])
+  @@index([prescriptionId])
+  @@index([status])
+  @@index([issuedAt])
+  @@index([dueAt])
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  patientId   String?
+  patient     Patient?     @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  dueAt       DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([patientId])
+  @@index([status])
+  @@index([priority])
+  @@index([dueAt])
+}
+
+model PatientDocument {
+  id               String   @id @default(cuid())
+  patientId        String
+  patient          Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  title            String
+  fileUrl          String
+  originalFilename String?
+  mimeType         String?
+  fileSize         Int?
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([createdAt])
 }
