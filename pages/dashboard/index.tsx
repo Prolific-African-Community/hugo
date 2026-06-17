@@ -184,9 +184,16 @@ export default function WorkspaceDashboard() {
                 onClick={() => router.push("/dashboard/users")}
                 className="rounded-full border border-black/10 px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white"
               >
-                Clients
+                Acces
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/patients")}
+              className="rounded-full border border-black/10 px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white"
+            >
+              Patients
+            </button>
             <button
               type="button"
               onClick={handleLogout}
