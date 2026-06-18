@@ -65,6 +65,30 @@ interface DashboardPayload {
   recentPatients: Patient[];
 }
 
+interface BillingReadinessItem {
+  patient: {
+    id: string;
+    firstName: string;
+    lastName: string;
+  };
+  prescription: {
+    id: string;
+    title: string;
+  };
+  prescribedSessions: number;
+  completedSessions: number;
+  remainingSessions: number;
+  suggestedAmountCents?: number;
+  suggestedCurrency?: string;
+  completionDate?: string | null;
+}
+
+interface BillingReadinessPayload {
+  prescriptionsNeedingAttention: BillingReadinessItem[];
+  invoiceDraftCandidates: BillingReadinessItem[];
+  invoiceReadyCandidates: BillingReadinessItem[];
+}
+
 interface ApiResponse<T> {
   success: boolean;
   data?: T;
@@ -157,6 +181,65 @@ function patientName(session: TherapySession) {
   return `${session.patient.firstName} ${session.patient.lastName}`.trim();
 }
 
+function readinessPatientName(item: BillingReadinessItem) {
+  return `${item.patient.firstName} ${item.patient.lastName}`.trim();
+}
+
+function BillingReadinessList({
+  empty,
+  creatingDraftId,
+  items,
+  onCreateDraft,
+  tone,
+}: {
+  empty: string;
+  creatingDraftId?: string | null;
+  items: BillingReadinessItem[];
+  onCreateDraft?: (item: BillingReadinessItem) => void;
+  tone: string;
+}) {
+  if (!items.length) {
+    return <p className="mt-4 text-sm font-medium text-black/45">{empty}</p>;
+  }
+
+  return (
+    <div className="mt-4 divide-y divide-black/5">
+      {items.slice(0, 5).map((item) => (
+        <div key={item.prescription.id} className="py-4 first:pt-0 last:pb-0">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="font-semibold">{readinessPatientName(item)}</p>
+              <p className="mt-1 text-sm font-medium text-black/55">
+                {item.prescription.title}
+              </p>
+            </div>
+            <span className="w-fit rounded-full bg-[#f4f4f7] px-3 py-1 text-[10px] font-semibold text-black/55">
+              {tone}
+            </span>
+          </div>
+          <p className="mt-3 text-xs font-medium text-black/45">
+            {item.completedSessions} / {item.prescribedSessions} seances
+            realisees · {item.remainingSessions} restante
+            {item.remainingSessions > 1 ? "s" : ""}
+          </p>
+          {onCreateDraft && (
+            <button
+              type="button"
+              onClick={() => onCreateDraft(item)}
+              disabled={creatingDraftId === item.prescription.id}
+              className={cn(BUTTON_DARK, "mt-3 px-3 py-2")}
+            >
+              {creatingDraftId === item.prescription.id
+                ? "Creation..."
+                : "Créer brouillon"}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function WorkspaceDashboard() {
   const router = useRouter();
   const [cabinet, setCabinet] = useState<Cabinet | null>(null);
@@ -166,9 +249,13 @@ export default function WorkspaceDashboard() {
   const [nearlyCompletedPrescriptions, setNearlyCompletedPrescriptions] =
     useState<Prescription[]>([]);
   const [recentPatients, setRecentPatients] = useState<Patient[]>([]);
+  const [billingReadiness, setBillingReadiness] =
+    useState<BillingReadinessPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [creatingDraftId, setCreatingDraftId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const request = async <T,>(url: string, options: RequestInit = {}) => {
     const token = localStorage.getItem("token");
@@ -181,6 +268,7 @@ export default function WorkspaceDashboard() {
     const response = await fetch(url, {
       ...options,
       headers: {
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
         Authorization: `Bearer ${token}`,
       },
@@ -200,18 +288,31 @@ export default function WorkspaceDashboard() {
     return payload.data as T;
   };
 
+  const loadBillingReadiness = async () => {
+    const billingData = await request<BillingReadinessPayload>(
+      "/api/hugo/billing-readiness"
+    );
+    setBillingReadiness(billingData);
+    return billingData;
+  };
+
   const loadCockpit = async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     setError(null);
+    if (showRefresh) setSuccess(null);
 
     try {
-      const data = await request<DashboardPayload>("/api/hugo/dashboard");
+      const [data, billingData] = await Promise.all([
+        request<DashboardPayload>("/api/hugo/dashboard"),
+        loadBillingReadiness(),
+      ]);
       setCabinet(data.cabinet);
       setMetrics(data.metrics);
       setTodaySessions(data.todaySessions);
       setUpcomingSessions(data.upcomingSessions);
       setNearlyCompletedPrescriptions(data.nearlyCompletedPrescriptions);
       setRecentPatients(data.recentPatients);
+      setBillingReadiness(billingData);
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -221,6 +322,31 @@ export default function WorkspaceDashboard() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  const handleCreateDraft = async (item: BillingReadinessItem) => {
+    setCreatingDraftId(item.prescription.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await request("/api/hugo/invoices/create-draft", {
+        method: "POST",
+        body: JSON.stringify({ prescriptionId: item.prescription.id }),
+      });
+      await loadBillingReadiness();
+      setSuccess(
+        `Brouillon cree pour ${readinessPatientName(item)} - ${item.prescription.title}.`
+      );
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Impossible de creer le brouillon"
+      );
+    } finally {
+      setCreatingDraftId(null);
     }
   };
 
@@ -286,9 +412,23 @@ export default function WorkspaceDashboard() {
         </section>
 
         {error && (
+          <section className="mt-4 space-y-3">
+            {error && (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-bold text-red-700">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-bold text-emerald-700">
+                {success}
+              </div>
+            )}
+          </section>
+        )}
+        {!error && success && (
           <section className="mt-4">
-            <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-bold text-red-700">
-              {error}
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-bold text-emerald-700">
+              {success}
             </div>
           </section>
         )}
@@ -315,6 +455,71 @@ export default function WorkspaceDashboard() {
             value={loading ? "..." : metrics?.upcomingSessionsCount ?? 0}
             detail="prochaines seances a garder en vue"
           />
+        </section>
+
+        <section className={cn(CARD, "mt-4 overflow-hidden")}>
+          <div className="flex flex-col gap-3 border-b border-black/5 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
+                Factures à préparer
+              </p>
+              <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em]">
+                Alertes de facturation
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
+              className={BUTTON_LIGHT}
+            >
+              Voir les factures
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="grid gap-4 p-5 lg:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <div key={index} className="h-40 animate-pulse rounded-2xl bg-black/5" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-4 p-5 lg:grid-cols-3">
+              <div className="rounded-2xl border border-black/5 bg-[#fbfbfc] p-4">
+                <h3 className="text-sm font-bold tracking-[-0.02em]">
+                  À surveiller
+                </h3>
+                <BillingReadinessList
+                  empty="Aucune prescription proche de la facturation."
+                  items={billingReadiness?.prescriptionsNeedingAttention || []}
+                  tone="Bientôt"
+                />
+              </div>
+
+              <div className="rounded-2xl border border-black/5 bg-[#fbfbfc] p-4">
+                <h3 className="text-sm font-bold tracking-[-0.02em]">
+                  Brouillon suggéré
+                </h3>
+                <BillingReadinessList
+                  empty="Aucun brouillon suggéré pour l'instant."
+                  creatingDraftId={creatingDraftId}
+                  items={billingReadiness?.invoiceDraftCandidates || []}
+                  onCreateDraft={handleCreateDraft}
+                  tone="Préparer"
+                />
+              </div>
+
+              <div className="rounded-2xl border border-black/5 bg-[#fbfbfc] p-4">
+                <h3 className="text-sm font-bold tracking-[-0.02em]">
+                  Prête à valider
+                </h3>
+                <BillingReadinessList
+                  empty="Aucune facture prête à valider."
+                  items={billingReadiness?.invoiceReadyCandidates || []}
+                  tone="Valider"
+                />
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="mt-4 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
