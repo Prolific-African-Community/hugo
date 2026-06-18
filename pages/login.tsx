@@ -25,22 +25,22 @@ function LoginVisual() {
     <div className="relative hidden min-h-[620px] overflow-hidden rounded-[2.5rem] bg-black p-10 text-white lg:block">
       <div className="relative z-10">
         <div className="inline-flex rounded-full border border-white/15 px-4 py-2 text-xs font-semibold text-white/70">
-          Secure access
+          Acces prive
         </div>
 
         <h2 className="mt-8 max-w-sm text-[3rem] font-bold leading-[0.98] tracking-[-0.05em]">
-          Financial clarity starts here.
+          Hugo garde le fil du cabinet.
         </h2>
 
         <p className="mt-6 max-w-sm text-sm font-medium leading-7 text-white/50">
-          Accedez au cockpit du cabinet, aux documents, aux clients et aux
-          taches de suivi depuis un espace sobre et controle.
+          Accedez au cockpit, aux patients, aux prescriptions et aux taches de
+          suivi depuis un espace sobre et controle.
         </p>
       </div>
 
       <div className="absolute bottom-12 left-10 right-10 z-10 rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 backdrop-blur">
         <div className="flex items-center justify-between text-xs text-white/50">
-          <span>Cabinet visibility</span>
+          <span>Cabinet prive</span>
           <span className="text-blue-300">Live</span>
         </div>
 
@@ -157,16 +157,15 @@ export default function LoginPage() {
 
               <div className="mt-16">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-500">
-                  Cockpit cabinet
+                  Acces prive
                 </p>
 
                 <h1 className="mt-4 max-w-sm text-[2.6rem] font-bold leading-[0.98] tracking-[-0.05em] text-black md:text-[3.6rem]">
-                  Se connecter a Hugo
+                  Connexion
                 </h1>
 
                 <p className="mt-6 max-w-sm text-sm font-medium leading-7 text-black/60">
-                  Accedez a votre espace cabinet, vos clients, vos documents et
-                  vos taches de suivi.
+                  Accès réservé au cabinet.
                 </p>
               </div>
 

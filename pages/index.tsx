@@ -77,9 +77,9 @@ function CockpitMockup() {
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <MiniMetric
-              label="Rendez-vous"
+              label="Journee"
               value="8"
-              detail="dont 2 nouveaux"
+              detail="actions a suivre"
               active
             />
             <MiniMetric label="Factures" value="3" detail="a preparer" />
@@ -146,7 +146,7 @@ function ProblemSection() {
   const frustrations = [
     "Suivi manuel des seances",
     "Factures preparees trop tard",
-    "Agenda difficile a gerer",
+    "Journee difficile a organiser",
     "Documents disperses",
     "Taches repetitives",
   ];
@@ -157,7 +157,7 @@ function ProblemSection() {
         <div className="max-w-2xl">
           <p className={EYEBROW}>Le probleme</p>
           <h2 className="mt-4 text-4xl font-bold leading-[1.02] tracking-[-0.055em] md:text-5xl">
-            Votre cabinet avance vite. L'administratif suit rarement.
+            Le cabinet avance vite. L'administratif doit rester sous controle.
           </h2>
         </div>
         <div className="mt-10 grid gap-3 md:grid-cols-5">
@@ -196,7 +196,7 @@ function SolutionSection() {
     ],
     [
       "Agenda",
-      "Voyez les priorites du jour et les creneaux qui peuvent etre mieux remplis.",
+      "Gardez une vision simple de la journee et des priorites du cabinet.",
     ],
   ];
 
@@ -207,7 +207,7 @@ function SolutionSection() {
           <div>
             <p className={EYEBROW}>La solution</p>
             <h2 className="mt-4 text-4xl font-bold leading-[1.02] tracking-[-0.055em] md:text-5xl">
-              Un copilote operationnel, pas un logiciel de plus.
+              Hugo est votre assistant de cabinet.
             </h2>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
@@ -239,7 +239,7 @@ function WorkflowSection() {
             Workflow
           </p>
           <h2 className="mt-4 text-4xl font-bold leading-[1.02] tracking-[-0.055em] md:text-5xl">
-            Du premier rendez-vous a la facture, le chemin reste simple.
+            Du patient a la facture, le suivi reste simple.
           </h2>
         </div>
 
@@ -288,10 +288,10 @@ export default function HomePage() {
   return (
     <main className={cn(PAGE_BG, "min-h-screen overflow-hidden text-black")}>
       <Head>
-        <title>Hugo | Assistant digital pour kinesitherapeutes</title>
+        <title>Hugo | Assistant prive de cabinet</title>
         <meta
           name="description"
-          content="Hugo est l'assistant digital premium concu pour aider les kinesitherapeutes independants a reduire l'administratif, suivre les seances et preparer les factures au bon moment."
+          content="Hugo est l'assistant digital prive du cabinet pour suivre les patients, les prescriptions, les seances et les taches du quotidien."
         />
       </Head>
 
@@ -300,13 +300,13 @@ export default function HomePage() {
           <LogoMark />
           <div className="flex items-center gap-3">
             <a
-              href="#decouvrir"
+              href="/login"
               className="hidden text-sm font-semibold text-black/55 no-underline transition hover:text-black sm:inline"
             >
-              Decouvrir Hugo
+              Connexion
             </a>
-            <a href="mailto:demo@hugo.lu?subject=Demande%20de%20demo%20Hugo" className={BUTTON_SECONDARY}>
-              Demander une demo
+            <a href="/login" className={BUTTON_SECONDARY}>
+              Connexion
             </a>
           </div>
         </nav>
@@ -314,21 +314,22 @@ export default function HomePage() {
 
       <section className={cn(CONTAINER, "grid gap-12 pb-20 pt-16 lg:grid-cols-[0.92fr_1.08fr] lg:items-center lg:pb-28 lg:pt-24")}>
         <div>
-          <p className={EYEBROW}>Assistant digital pour kinesitherapeutes</p>
+          <p className={EYEBROW}>Assistant digital privé pour la gestion quotidienne du cabinet.</p>
           <h1 className="mt-5 max-w-3xl text-6xl font-black leading-[0.92] tracking-[-0.07em] md:text-7xl lg:text-8xl">
-            Moins d'administratif.
+            Hugo est votre
             <br />
-            Plus de patients.
+            assistant de cabinet.
           </h1>
           <p className="mt-7 max-w-xl text-lg font-medium leading-8 text-black/58">
-            L'assistant digital concu pour les kinesitherapeutes independants.
+            Un espace prive pour suivre les patients, les prescriptions, les
+            seances, les documents et les taches du quotidien.
           </p>
           <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-            <a href="mailto:demo@hugo.lu?subject=Demande%20de%20demo%20Hugo" className={BUTTON_PRIMARY}>
-              Demander une demo
+            <a href="/login" className={BUTTON_PRIMARY}>
+              Connexion
             </a>
-            <a href="#decouvrir" className={BUTTON_SECONDARY}>
-              Decouvrir Hugo
+            <a href="/login" className={BUTTON_SECONDARY}>
+              Connexion
             </a>
           </div>
         </div>
@@ -344,19 +345,19 @@ export default function HomePage() {
       <section className="px-6 pb-20 md:pb-28">
         <div className="mx-auto max-w-5xl rounded-[2rem] bg-black px-7 py-12 text-center text-white shadow-[0_28px_80px_rgba(0,0,0,0.22)] md:px-12 md:py-16">
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-300">
-            Demo Hugo
+            Acces prive
           </p>
           <h2 className="mx-auto mt-4 max-w-3xl text-4xl font-bold leading-[1.02] tracking-[-0.055em] md:text-6xl">
-            Concentrez-vous sur vos patients.
+            Votre cabinet reste clair.
             <br />
-            Hugo s'occupe du reste.
+            Hugo garde le fil.
           </h2>
           <div className="mt-8">
             <a
-              href="mailto:demo@hugo.lu?subject=Demande%20de%20demo%20Hugo"
+              href="/login"
               className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3.5 text-sm font-semibold text-black no-underline shadow-sm transition hover:-translate-y-px"
             >
-              Demander une demo
+              Connexion
             </a>
           </div>
         </div>

@@ -3,6 +3,7 @@ import {
   AccountingStandard,
   EntityRole,
   EntityType,
+  OrganizationStatus,
   OrganizationRole,
   OrganizationType,
   PlatformRole,
@@ -16,6 +17,10 @@ const prisma = new PrismaClient();
 
 const ADMIN_EMAIL = 'admin@proliquid.local';
 const ADMIN_PASSWORD = 'Admin123!';
+const HUGO_EMAIL = 'hugo@local.test';
+const HUGO_PASSWORD = 'kine1234';
+const HUGO_ORGANIZATION_NAME = 'Cabinet Hugo';
+const HUGO_ENTITY_NAME = 'Cabinet Hugo';
 const ORGANIZATION_NAME = 'Hugo Demo Cabinet';
 const ENTITY_NAME = 'Hugo Demo Workspace';
 const TEMPLATE_NAME = 'Legacy Starter Template';
@@ -67,6 +72,7 @@ const rules = [
 
 async function main() {
   const password = await bcrypt.hash(ADMIN_PASSWORD, 12);
+  const hugoPassword = await bcrypt.hash(HUGO_PASSWORD, 12);
 
   const admin = await prisma.user.upsert({
     where: { email: ADMIN_EMAIL },
@@ -82,6 +88,111 @@ async function main() {
       role: UserRole.ADMIN,
       platformRole: PlatformRole.SUPER_ADMIN,
       mustChangePassword: false,
+    },
+  });
+
+  const hugoUser = await prisma.user.upsert({
+    where: { email: HUGO_EMAIL },
+    update: {
+      password: hugoPassword,
+      role: UserRole.USER,
+      platformRole: PlatformRole.NONE,
+      mustChangePassword: false,
+    },
+    create: {
+      email: HUGO_EMAIL,
+      password: hugoPassword,
+      role: UserRole.USER,
+      platformRole: PlatformRole.NONE,
+      mustChangePassword: false,
+    },
+  });
+
+  const existingHugoOrganization = await prisma.organization.findFirst({
+    where: { name: HUGO_ORGANIZATION_NAME },
+  });
+
+  const hugoOrganizationData = {
+    name: HUGO_ORGANIZATION_NAME,
+    legalName: HUGO_ORGANIZATION_NAME,
+    type: OrganizationType.COMPANY,
+    country: 'LU',
+    baseCurrency: 'EUR',
+    status: OrganizationStatus.ACTIVE,
+    isActive: true,
+  };
+
+  const hugoOrganization = existingHugoOrganization
+    ? await prisma.organization.update({
+        where: { id: existingHugoOrganization.id },
+        data: hugoOrganizationData,
+      })
+    : await prisma.organization.create({ data: hugoOrganizationData });
+
+  await prisma.organizationUser.upsert({
+    where: {
+      organizationId_userId: {
+        organizationId: hugoOrganization.id,
+        userId: hugoUser.id,
+      },
+    },
+    update: {
+      role: OrganizationRole.ORG_ADMIN,
+      isActive: true,
+    },
+    create: {
+      organizationId: hugoOrganization.id,
+      userId: hugoUser.id,
+      role: OrganizationRole.ORG_ADMIN,
+      isActive: true,
+    },
+  });
+
+  const existingHugoEntity = await prisma.entity.findFirst({
+    where: {
+      organizationId: hugoOrganization.id,
+      name: HUGO_ENTITY_NAME,
+    },
+  });
+
+  const hugoEntityData = {
+    organizationId: hugoOrganization.id,
+    name: HUGO_ENTITY_NAME,
+    legalName: HUGO_ENTITY_NAME,
+    type: EntityType.COMPANY,
+    country: 'LU',
+    baseCurrency: 'EUR',
+    accountingStandard: AccountingStandard.LUX_GAAP,
+    fiscalYearStartMonth: 1,
+    fiscalYearStartDay: 1,
+    fiscalYearEndMonth: 12,
+    fiscalYearEndDay: 31,
+    isActive: true,
+  };
+
+  const hugoEntity = existingHugoEntity
+    ? await prisma.entity.update({
+        where: { id: existingHugoEntity.id },
+        data: hugoEntityData,
+      })
+    : await prisma.entity.create({ data: hugoEntityData });
+
+  await prisma.entityUser.upsert({
+    where: {
+      entityId_userId: {
+        entityId: hugoEntity.id,
+        userId: hugoUser.id,
+      },
+    },
+    update: {
+      role: EntityRole.ENTITY_ADMIN,
+      isActive: true,
+    },
+    create: {
+      entityId: hugoEntity.id,
+      userId: hugoUser.id,
+      role: EntityRole.ENTITY_ADMIN,
+      isActive: true,
     },
   });
 
@@ -342,7 +453,7 @@ async function main() {
   }
 
   console.log(
-    `Seeded ${ADMIN_EMAIL}, ${ORGANIZATION_NAME}, ${ENTITY_NAME}, and ${TEMPLATE_NAME}.`
+    `Seeded ${ADMIN_EMAIL}, ${HUGO_EMAIL}, ${HUGO_ORGANIZATION_NAME}, ${HUGO_ENTITY_NAME}, ${ORGANIZATION_NAME}, ${ENTITY_NAME}, and ${TEMPLATE_NAME}.`
   );
 }
 
