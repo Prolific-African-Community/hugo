@@ -7,8 +7,7 @@ import {
   jsonSuccess,
 } from "../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
-import { getCurrentUserRecord } from "../../../../lib/entity-access";
-import { canAccessEntity, canManageEntity } from "../../../../lib/permissions";
+import { requireHugoCabinet } from "../../../../lib/hugo-auth";
 import { prisma } from "../../../../lib/prisma";
 
 interface PatientBody {
@@ -53,8 +52,8 @@ const listPatients = async (
     return jsonError(res, 400, "entityId is required");
   }
 
-  const currentUser = await getCurrentUserRecord(req.user.id);
-  if (!currentUser || !(await canAccessEntity(currentUser, entityId))) {
+  const cabinet = await requireHugoCabinet(req);
+  if (!cabinet || cabinet.cabinetId !== entityId) {
     return jsonError(res, 403, "Forbidden");
   }
 
@@ -80,8 +79,8 @@ const createPatient = async (
     return jsonError(res, 400, "entityId is required");
   }
 
-  const currentUser = await getCurrentUserRecord(req.user.id);
-  if (!currentUser || !(await canManageEntity(currentUser, entityId))) {
+  const cabinet = await requireHugoCabinet(req);
+  if (!cabinet || cabinet.cabinetId !== entityId) {
     return jsonError(res, 403, "Forbidden");
   }
 
