@@ -685,6 +685,7 @@ model TherapySession {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
+  @@unique([prescriptionId, sessionNumber])
   @@index([entityId])
   @@index([entityId, status])
   @@index([entityId, scheduledAt])
