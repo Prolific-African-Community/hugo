@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 
-type PatientStatus = "ACTIVE" | "INACTIVE" | "ARCHIVED";
+type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
 
 interface EntityListItem {
   id: string;
@@ -11,24 +11,33 @@ interface EntityListItem {
 
 interface Patient {
   id: string;
-  entityId: string;
   firstName: string;
   lastName: string;
-  email?: string | null;
-  phone?: string | null;
-  cnsNumber?: string | null;
-  status: PatientStatus;
+}
+
+interface Prescription {
+  id: string;
+  entityId: string;
+  patientId: string;
+  patient: Patient;
+  title: string;
+  prescribedSessions: number;
+  completedSessions: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  status: PrescriptionStatus;
   notes?: string | null;
   updatedAt: string;
 }
 
-interface PatientForm {
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  cnsNumber: string;
-  status: PatientStatus;
+interface PrescriptionForm {
+  patientId: string;
+  title: string;
+  prescribedSessions: string;
+  completedSessions: string;
+  startDate: string;
+  endDate: string;
+  status: PrescriptionStatus;
   notes: string;
 }
 
@@ -51,14 +60,20 @@ const BUTTON_DARK =
 const BUTTON_LIGHT =
   "inline-flex items-center justify-center rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50";
 
-const STATUS_OPTIONS: PatientStatus[] = ["ACTIVE", "INACTIVE", "ARCHIVED"];
+const STATUS_OPTIONS: PrescriptionStatus[] = [
+  "ACTIVE",
+  "COMPLETED",
+  "EXPIRED",
+  "CANCELLED",
+];
 
-const initialPatientForm = (): PatientForm => ({
-  firstName: "",
-  lastName: "",
-  email: "",
-  phone: "",
-  cnsNumber: "",
+const initialPrescriptionForm = (): PrescriptionForm => ({
+  patientId: "",
+  title: "",
+  prescribedSessions: "10",
+  completedSessions: "0",
+  startDate: "",
+  endDate: "",
   status: "ACTIVE",
   notes: "",
 });
@@ -75,11 +90,14 @@ function LogoMark() {
   );
 }
 
-function patientDisplayName(patient: Patient) {
+function patientDisplayName(patient?: Patient | null) {
+  if (!patient) return "Patient inconnu";
   return `${patient.firstName} ${patient.lastName}`.trim();
 }
 
-function formatDate(value: string) {
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "-"
@@ -90,29 +108,42 @@ function formatDate(value: string) {
       }).format(date);
 }
 
-function formFromPatient(patient: Patient): PatientForm {
+function dateInputValue(value?: string | null) {
+  if (!value) return "";
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+}
+
+function formFromPrescription(prescription: Prescription): PrescriptionForm {
   return {
-    firstName: patient.firstName,
-    lastName: patient.lastName,
-    email: patient.email || "",
-    phone: patient.phone || "",
-    cnsNumber: patient.cnsNumber || "",
-    status: patient.status,
-    notes: patient.notes || "",
+    patientId: prescription.patientId,
+    title: prescription.title,
+    prescribedSessions: String(prescription.prescribedSessions),
+    completedSessions: String(prescription.completedSessions),
+    startDate: dateInputValue(prescription.startDate),
+    endDate: dateInputValue(prescription.endDate),
+    status: prescription.status,
+    notes: prescription.notes || "",
   };
 }
 
-export default function PatientsDashboardPage() {
+export default function PrescriptionsDashboardPage() {
   const router = useRouter();
   const [entities, setEntities] = useState<EntityListItem[]>([]);
   const [activeEntityId, setActiveEntityId] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [form, setForm] = useState<PatientForm>(initialPatientForm);
-  const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
+  const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
+  const [form, setForm] = useState<PrescriptionForm>(initialPrescriptionForm);
+  const [editingPrescriptionId, setEditingPrescriptionId] = useState<string | null>(
+    null
+  );
   const [loadingEntities, setLoadingEntities] = useState(true);
-  const [loadingPatients, setLoadingPatients] = useState(false);
+  const [loadingData, setLoadingData] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deletingPatientId, setDeletingPatientId] = useState<string | null>(null);
+  const [deletingPrescriptionId, setDeletingPrescriptionId] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -177,28 +208,40 @@ export default function PatientsDashboardPage() {
     }
   };
 
-  const loadPatients = async (entityId: string) => {
+  const loadWorkspaceData = async (entityId: string) => {
     if (!entityId) {
       setPatients([]);
+      setPrescriptions([]);
       return;
     }
 
-    setLoadingPatients(true);
+    setLoadingData(true);
     setError(null);
 
     try {
-      const data = await request<Patient[]>(
-        `/api/hugo/patients?entityId=${encodeURIComponent(entityId)}`
-      );
-      setPatients(data);
+      const [patientData, prescriptionData] = await Promise.all([
+        request<Patient[]>(
+          `/api/hugo/patients?entityId=${encodeURIComponent(entityId)}`
+        ),
+        request<Prescription[]>(
+          `/api/hugo/prescriptions?entityId=${encodeURIComponent(entityId)}`
+        ),
+      ]);
+
+      setPatients(patientData);
+      setPrescriptions(prescriptionData);
+      setForm((current) => ({
+        ...current,
+        patientId: current.patientId || patientData[0]?.id || "",
+      }));
     } catch (loadError) {
       setError(
         loadError instanceof Error
           ? loadError.message
-          : "Impossible de charger les patients"
+          : "Impossible de charger les prescriptions"
       );
     } finally {
-      setLoadingPatients(false);
+      setLoadingData(false);
     }
   };
 
@@ -209,23 +252,38 @@ export default function PatientsDashboardPage() {
 
   useEffect(() => {
     if (!activeEntityId) return;
-    loadPatients(activeEntityId);
+    loadWorkspaceData(activeEntityId);
   }, [activeEntityId]);
 
-  const resetForm = () => {
-    setForm(initialPatientForm());
-    setEditingPatientId(null);
+  const resetForm = (nextPatientId = patients[0]?.id || "") => {
+    setForm({
+      ...initialPrescriptionForm(),
+      patientId: nextPatientId,
+    });
+    setEditingPrescriptionId(null);
   };
 
   const handleEntityChange = (entityId: string) => {
     setActiveEntityId(entityId);
-    resetForm();
+    resetForm("");
     router.replace(
-      `/dashboard/patients${entityId ? `?entityId=${entityId}` : ""}`,
+      `/dashboard/prescriptions${entityId ? `?entityId=${entityId}` : ""}`,
       undefined,
       { shallow: true }
     );
   };
+
+  const buildPayload = () => ({
+    entityId: activeEntityId,
+    patientId: form.patientId,
+    title: form.title,
+    prescribedSessions: Number(form.prescribedSessions),
+    completedSessions: Number(form.completedSessions || 0),
+    startDate: form.startDate || null,
+    endDate: form.endDate || null,
+    status: form.status,
+    notes: form.notes,
+  });
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -235,93 +293,89 @@ export default function PatientsDashboardPage() {
       return;
     }
 
+    if (!form.patientId) {
+      setError("Selectionnez un patient avant de creer une prescription.");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     setSuccess(null);
 
-    const payload = {
-      entityId: activeEntityId,
-      firstName: form.firstName,
-      lastName: form.lastName,
-      email: form.email,
-      phone: form.phone,
-      cnsNumber: form.cnsNumber,
-      status: form.status,
-      notes: form.notes,
-    };
+    const payload = buildPayload();
 
     try {
-      if (editingPatientId) {
-        const updated = await request<Patient>(
-          `/api/hugo/patients/${editingPatientId}`,
+      if (editingPrescriptionId) {
+        const updated = await request<Prescription>(
+          `/api/hugo/prescriptions/${editingPrescriptionId}`,
           {
             method: "PATCH",
             body: JSON.stringify(payload),
           }
         );
-        setPatients((current) =>
-          current.map((patient) =>
-            patient.id === updated.id ? updated : patient
+        setPrescriptions((current) =>
+          current.map((prescription) =>
+            prescription.id === updated.id ? updated : prescription
           )
         );
-        setSuccess("Patient mis a jour.");
+        setSuccess("Prescription mise a jour.");
       } else {
-        const created = await request<Patient>("/api/hugo/patients", {
+        const created = await request<Prescription>("/api/hugo/prescriptions", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        setPatients((current) => [created, ...current]);
-        setSuccess("Patient cree.");
+        setPrescriptions((current) => [created, ...current]);
+        setSuccess("Prescription creee.");
       }
 
-      resetForm();
+      resetForm(form.patientId);
     } catch (saveError) {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : "Impossible d'enregistrer le patient"
+          : "Impossible d'enregistrer la prescription"
       );
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = (patient: Patient) => {
-    setEditingPatientId(patient.id);
-    setForm(formFromPatient(patient));
+  const handleEdit = (prescription: Prescription) => {
+    setEditingPrescriptionId(prescription.id);
+    setForm(formFromPrescription(prescription));
     setError(null);
     setSuccess(null);
   };
 
-  const handleDelete = async (patient: Patient) => {
+  const handleDelete = async (prescription: Prescription) => {
     if (!activeEntityId) return;
 
-    setDeletingPatientId(patient.id);
+    setDeletingPrescriptionId(prescription.id);
     setError(null);
     setSuccess(null);
 
     try {
       await request<{ id: string }>(
-        `/api/hugo/patients/${patient.id}?entityId=${encodeURIComponent(
+        `/api/hugo/prescriptions/${prescription.id}?entityId=${encodeURIComponent(
           activeEntityId
         )}`,
         { method: "DELETE" }
       );
-      setPatients((current) =>
-        current.filter((currentPatient) => currentPatient.id !== patient.id)
+      setPrescriptions((current) =>
+        current.filter((currentPrescription) => currentPrescription.id !== prescription.id)
       );
-      if (editingPatientId === patient.id) {
+      if (editingPrescriptionId === prescription.id) {
         resetForm();
       }
-      setSuccess("Patient supprime.");
+      setSuccess("Prescription supprimee.");
     } catch (deleteError) {
       setError(
         deleteError instanceof Error
           ? deleteError.message
-          : "Impossible de supprimer le patient"
+          : "Impossible de supprimer la prescription"
       );
     } finally {
-      setDeletingPatientId(null);
+      setDeletingPrescriptionId(null);
     }
   };
 
@@ -340,17 +394,17 @@ export default function PatientsDashboardPage() {
             </button>
             <button
               type="button"
+              onClick={() => router.push("/dashboard/patients")}
+              className={BUTTON_LIGHT}
+            >
+              Patients
+            </button>
+            <button
+              type="button"
               onClick={() => router.push("/dashboard/users")}
               className={BUTTON_LIGHT}
             >
               Acces
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/prescriptions")}
-              className={BUTTON_LIGHT}
-            >
-              Prescriptions
             </button>
           </div>
         </nav>
@@ -361,14 +415,14 @@ export default function PatientsDashboardPage() {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Patients
+                Prescriptions
               </p>
               <h1 className="mt-3 text-3xl font-bold tracking-[-0.04em]">
-                Liste patients
+                Suivi des prescriptions
               </h1>
               <p className="mt-2 max-w-2xl text-sm font-medium leading-6 text-black/50">
-                Un premier espace simple pour creer, modifier et garder les
-                coordonnees essentielles des patients du cabinet.
+                Un espace simple pour suivre les seances prevues, realisees et
+                restantes par patient.
               </p>
             </div>
 
@@ -411,45 +465,91 @@ export default function PatientsDashboardPage() {
         <section className="mt-4 grid gap-4 xl:grid-cols-[0.95fr_1.25fr]">
           <div className={cn(CARD, "p-5")}>
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-              {editingPatientId ? "Edition" : "Nouveau patient"}
+              {editingPrescriptionId ? "Edition" : "Nouvelle prescription"}
             </p>
             <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em]">
-              {editingPatientId ? "Modifier le patient" : "Ajouter un patient"}
+              {editingPrescriptionId
+                ? "Modifier la prescription"
+                : "Ajouter une prescription"}
             </h2>
 
             <form onSubmit={handleSubmit} className="mt-5 grid gap-4">
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                  Patient
+                </span>
+                <select
+                  value={form.patientId}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      patientId: event.target.value,
+                    }))
+                  }
+                  className={INPUT}
+                  required
+                >
+                  {!patients.length && <option value="">Aucun patient</option>}
+                  {patients.map((patient) => (
+                    <option key={patient.id} value={patient.id}>
+                      {patientDisplayName(patient)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                  Titre
+                </span>
+                <input
+                  value={form.title}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
+                  }
+                  className={INPUT}
+                  required
+                />
+              </label>
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Prenom
+                    Seances prevues
                   </span>
                   <input
-                    value={form.firstName}
+                    value={form.prescribedSessions}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        firstName: event.target.value,
+                        prescribedSessions: event.target.value,
                       }))
                     }
                     className={INPUT}
+                    min={1}
                     required
+                    type="number"
                   />
                 </label>
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Nom
+                    Seances realisees
                   </span>
                   <input
-                    value={form.lastName}
+                    value={form.completedSessions}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        lastName: event.target.value,
+                        completedSessions: event.target.value,
                       }))
                     }
                     className={INPUT}
-                    required
+                    min={0}
+                    type="number"
                   />
                 </label>
               </div>
@@ -457,77 +557,60 @@ export default function PatientsDashboardPage() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Email
+                    Debut
                   </span>
                   <input
-                    value={form.email}
+                    value={form.startDate}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        email: event.target.value,
+                        startDate: event.target.value,
                       }))
                     }
                     className={INPUT}
-                    type="email"
+                    type="date"
                   />
                 </label>
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Telephone
+                    Fin
                   </span>
                   <input
-                    value={form.phone}
+                    value={form.endDate}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        phone: event.target.value,
+                        endDate: event.target.value,
                       }))
                     }
                     className={INPUT}
+                    type="date"
                   />
                 </label>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    CNS
-                  </span>
-                  <input
-                    value={form.cnsNumber}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        cnsNumber: event.target.value,
-                      }))
-                    }
-                    className={INPUT}
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Statut
-                  </span>
-                  <select
-                    value={form.status}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        status: event.target.value as PatientStatus,
-                      }))
-                    }
-                    className={INPUT}
-                  >
-                    {STATUS_OPTIONS.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
+              <label>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                  Statut
+                </span>
+                <select
+                  value={form.status}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      status: event.target.value as PrescriptionStatus,
+                    }))
+                  }
+                  className={INPUT}
+                >
+                  {STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <label>
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
@@ -548,19 +631,19 @@ export default function PatientsDashboardPage() {
               <div className="flex flex-wrap gap-3">
                 <button
                   type="submit"
-                  disabled={saving || !activeEntityId}
+                  disabled={saving || !activeEntityId || !patients.length}
                   className={BUTTON_DARK}
                 >
                   {saving
                     ? "Enregistrement..."
-                    : editingPatientId
+                    : editingPrescriptionId
                     ? "Mettre a jour"
-                    : "Creer le patient"}
+                    : "Creer la prescription"}
                 </button>
-                {editingPatientId && (
+                {editingPrescriptionId && (
                   <button
                     type="button"
-                    onClick={resetForm}
+                    onClick={() => resetForm()}
                     className={BUTTON_LIGHT}
                   >
                     Annuler
@@ -574,89 +657,102 @@ export default function PatientsDashboardPage() {
             <div className="flex flex-col gap-2 border-b border-black/5 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <h2 className="text-xl font-semibold tracking-[-0.03em]">
-                  Patients
+                  Prescriptions
                 </h2>
                 <p className="mt-1 text-sm font-medium text-black/45">
-                  {activeEntity?.name || "Cabinet"} - {patients.length} patient
-                  {patients.length > 1 ? "s" : ""}
+                  {activeEntity?.name || "Cabinet"} - {prescriptions.length} prescription
+                  {prescriptions.length > 1 ? "s" : ""}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => activeEntityId && loadPatients(activeEntityId)}
-                disabled={loadingPatients || !activeEntityId}
+                onClick={() => activeEntityId && loadWorkspaceData(activeEntityId)}
+                disabled={loadingData || !activeEntityId}
                 className={BUTTON_LIGHT}
               >
-                {loadingPatients ? "Chargement..." : "Actualiser"}
+                {loadingData ? "Chargement..." : "Actualiser"}
               </button>
             </div>
 
-            {loadingPatients ? (
+            {loadingData ? (
               <div className="px-5 py-10">
                 <div className="animate-pulse space-y-3">
                   {Array.from({ length: 4 }).map((_, index) => (
-                    <div key={index} className="h-16 rounded-2xl bg-black/5" />
+                    <div key={index} className="h-20 rounded-2xl bg-black/5" />
                   ))}
                 </div>
               </div>
-            ) : !patients.length ? (
+            ) : !prescriptions.length ? (
               <div className="px-5 py-14 text-center">
-                <p className="text-base font-semibold">Aucun patient.</p>
+                <p className="text-base font-semibold">Aucune prescription.</p>
                 <p className="mt-2 text-sm font-medium text-black/50">
-                  Ajoutez le premier patient pour commencer a structurer le
-                  suivi du cabinet.
+                  Ajoutez une prescription pour suivre les seances restantes.
                 </p>
               </div>
             ) : (
               <div className="divide-y divide-black/5">
-                {patients.map((patient) => (
-                  <div
-                    key={patient.id}
-                    className="grid gap-4 px-5 py-5 transition hover:bg-black/[0.02] lg:grid-cols-[1fr_auto]"
-                  >
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-semibold">
-                          {patientDisplayName(patient)}
-                        </p>
-                        <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/55">
-                          {patient.status}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-medium text-black/45">
-                        <span>{patient.email || "Email manquant"}</span>
-                        <span>{patient.phone || "Telephone manquant"}</span>
-                        <span>{patient.cnsNumber || "CNS manquant"}</span>
-                        <span>MAJ {formatDate(patient.updatedAt)}</span>
-                      </div>
-                      {patient.notes && (
-                        <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-black/50">
-                          {patient.notes}
-                        </p>
-                      )}
-                    </div>
+                {prescriptions.map((prescription) => {
+                  const remainingSessions = Math.max(
+                    0,
+                    prescription.prescribedSessions - prescription.completedSessions
+                  );
 
-                    <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(patient)}
-                        className={BUTTON_LIGHT}
-                      >
-                        Modifier
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(patient)}
-                        disabled={deletingPatientId === patient.id}
-                        className="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {deletingPatientId === patient.id
-                          ? "Suppression..."
-                          : "Supprimer"}
-                      </button>
+                  return (
+                    <div
+                      key={prescription.id}
+                      className="grid gap-4 px-5 py-5 transition hover:bg-black/[0.02] lg:grid-cols-[1fr_auto]"
+                    >
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-semibold">{prescription.title}</p>
+                          <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/55">
+                            {prescription.status}
+                          </span>
+                        </div>
+
+                        <p className="mt-2 text-sm font-semibold text-black/60">
+                          {patientDisplayName(prescription.patient)}
+                        </p>
+
+                        <div className="mt-3 grid gap-2 text-xs font-medium text-black/50 sm:grid-cols-2">
+                          <span>
+                            {prescription.completedSessions}/
+                            {prescription.prescribedSessions} seances realisees
+                          </span>
+                          <span>{remainingSessions} restantes</span>
+                          <span>Debut {formatDate(prescription.startDate)}</span>
+                          <span>Fin {formatDate(prescription.endDate)}</span>
+                        </div>
+
+                        {prescription.notes && (
+                          <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-black/50">
+                            {prescription.notes}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(prescription)}
+                          className={BUTTON_LIGHT}
+                        >
+                          Modifier
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(prescription)}
+                          disabled={deletingPrescriptionId === prescription.id}
+                          className="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {deletingPrescriptionId === prescription.id
+                            ? "Suppression..."
+                            : "Supprimer"}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
