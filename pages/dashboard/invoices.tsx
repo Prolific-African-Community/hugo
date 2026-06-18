@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 
-type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
+type InvoiceStatus = "DRAFT" | "READY" | "ISSUED" | "PAID" | "CANCELLED";
 
 interface Cabinet {
   cabinetId: string;
@@ -17,28 +17,38 @@ interface Patient {
 
 interface Prescription {
   id: string;
-  entityId: string;
   patientId: string;
-  patient: Patient;
   title: string;
   prescribedSessions: number;
   completedSessions: number;
-  startDate?: string | null;
-  endDate?: string | null;
-  status: PrescriptionStatus;
-  notes?: string | null;
+}
+
+interface Invoice {
+  id: string;
+  patientId: string;
+  prescriptionId: string | null;
+  patient: Patient;
+  prescription: Prescription | null;
+  invoiceNumber?: string | null;
+  status: InvoiceStatus;
+  amountCents: number;
+  currency: string;
+  issuedAt?: string | null;
+  dueAt?: string | null;
+  paidAt?: string | null;
   updatedAt: string;
 }
 
-interface PrescriptionForm {
+interface InvoiceForm {
   patientId: string;
-  title: string;
-  prescribedSessions: string;
-  completedSessions: string;
-  startDate: string;
-  endDate: string;
-  status: PrescriptionStatus;
-  notes: string;
+  prescriptionId: string;
+  invoiceNumber: string;
+  status: InvoiceStatus;
+  amount: string;
+  currency: string;
+  issuedAt: string;
+  dueAt: string;
+  paidAt: string;
 }
 
 interface ApiResponse<T> {
@@ -60,22 +70,24 @@ const BUTTON_DARK =
 const BUTTON_LIGHT =
   "inline-flex items-center justify-center rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50";
 
-const STATUS_OPTIONS: PrescriptionStatus[] = [
-  "ACTIVE",
-  "COMPLETED",
-  "EXPIRED",
+const STATUS_OPTIONS: InvoiceStatus[] = [
+  "DRAFT",
+  "READY",
+  "ISSUED",
+  "PAID",
   "CANCELLED",
 ];
 
-const initialPrescriptionForm = (): PrescriptionForm => ({
+const initialInvoiceForm = (): InvoiceForm => ({
   patientId: "",
-  title: "",
-  prescribedSessions: "10",
-  completedSessions: "0",
-  startDate: "",
-  endDate: "",
-  status: "ACTIVE",
-  notes: "",
+  prescriptionId: "",
+  invoiceNumber: "",
+  status: "DRAFT",
+  amount: "0.00",
+  currency: "EUR",
+  issuedAt: "",
+  dueAt: "",
+  paidAt: "",
 });
 
 function LogoMark() {
@@ -115,41 +127,64 @@ function dateInputValue(value?: string | null) {
   return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
 }
 
-function formFromPrescription(prescription: Prescription): PrescriptionForm {
+function amountInputValue(amountCents: number) {
+  return (amountCents / 100).toFixed(2);
+}
+
+function amountToCents(value: string) {
+  const normalized = value.replace(",", ".").trim();
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) : NaN;
+}
+
+function formatAmount(amountCents: number, currency: string) {
+  return new Intl.NumberFormat("fr-LU", {
+    style: "currency",
+    currency: currency || "EUR",
+  }).format(amountCents / 100);
+}
+
+function formFromInvoice(invoice: Invoice): InvoiceForm {
   return {
-    patientId: prescription.patientId,
-    title: prescription.title,
-    prescribedSessions: String(prescription.prescribedSessions),
-    completedSessions: String(prescription.completedSessions),
-    startDate: dateInputValue(prescription.startDate),
-    endDate: dateInputValue(prescription.endDate),
-    status: prescription.status,
-    notes: prescription.notes || "",
+    patientId: invoice.patientId,
+    prescriptionId: invoice.prescriptionId || "",
+    invoiceNumber: invoice.invoiceNumber || "",
+    status: invoice.status,
+    amount: amountInputValue(invoice.amountCents),
+    currency: invoice.currency || "EUR",
+    issuedAt: dateInputValue(invoice.issuedAt),
+    dueAt: dateInputValue(invoice.dueAt),
+    paidAt: dateInputValue(invoice.paidAt),
   };
 }
 
-export default function PrescriptionsDashboardPage() {
+export default function InvoicesDashboardPage() {
   const router = useRouter();
   const [cabinet, setCabinet] = useState<Cabinet | null>(null);
   const [activeEntityId, setActiveEntityId] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
-  const [form, setForm] = useState<PrescriptionForm>(initialPrescriptionForm);
-  const [editingPrescriptionId, setEditingPrescriptionId] = useState<string | null>(
-    null
-  );
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [form, setForm] = useState<InvoiceForm>(initialInvoiceForm);
+  const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const [loadingEntities, setLoadingEntities] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deletingPrescriptionId, setDeletingPrescriptionId] = useState<
-    string | null
-  >(null);
+  const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const activeEntity = useMemo(
     () => (cabinet?.cabinetId === activeEntityId ? cabinet : null),
     [activeEntityId, cabinet]
+  );
+
+  const filteredPrescriptions = useMemo(
+    () =>
+      prescriptions.filter(
+        (prescription) => prescription.patientId === form.patientId
+      ),
+    [form.patientId, prescriptions]
   );
 
   const request = async <T,>(url: string, options: RequestInit = {}) => {
@@ -183,6 +218,22 @@ export default function PrescriptionsDashboardPage() {
     return payload.data as T;
   };
 
+  const resolveInitialForm = (
+    patientData: Patient[],
+    prescriptionData: Prescription[]
+  ) => {
+    const patientId = patientData[0]?.id || "";
+    const prescriptionId =
+      prescriptionData.find((prescription) => prescription.patientId === patientId)
+        ?.id || "";
+
+    return {
+      ...initialInvoiceForm(),
+      patientId,
+      prescriptionId,
+    };
+  };
+
   const loadEntities = async () => {
     setLoadingEntities(true);
     setError(null);
@@ -212,6 +263,7 @@ export default function PrescriptionsDashboardPage() {
     if (!entityId) {
       setPatients([]);
       setPrescriptions([]);
+      setInvoices([]);
       return;
     }
 
@@ -219,26 +271,28 @@ export default function PrescriptionsDashboardPage() {
     setError(null);
 
     try {
-      const [patientData, prescriptionData] = await Promise.all([
+      const [patientData, prescriptionData, invoiceData] = await Promise.all([
         request<Patient[]>(
           `/api/hugo/patients?entityId=${encodeURIComponent(entityId)}`
         ),
         request<Prescription[]>(
           `/api/hugo/prescriptions?entityId=${encodeURIComponent(entityId)}`
         ),
+        request<Invoice[]>("/api/hugo/invoices"),
       ]);
 
       setPatients(patientData);
       setPrescriptions(prescriptionData);
-      setForm((current) => ({
-        ...current,
-        patientId: current.patientId || patientData[0]?.id || "",
-      }));
+      setInvoices(invoiceData);
+      setForm((current) => {
+        if (current.patientId && current.prescriptionId) return current;
+        return resolveInitialForm(patientData, prescriptionData);
+      });
     } catch (loadError) {
       setError(
         loadError instanceof Error
           ? loadError.message
-          : "Impossible de charger les prescriptions"
+          : "Impossible de charger les factures"
       );
     } finally {
       setLoadingData(false);
@@ -255,34 +309,73 @@ export default function PrescriptionsDashboardPage() {
     loadWorkspaceData(activeEntityId);
   }, [activeEntityId]);
 
-  const resetForm = (nextPatientId = patients[0]?.id || "") => {
+  useEffect(() => {
+    if (!form.patientId) return;
+    if (
+      form.prescriptionId &&
+      filteredPrescriptions.some(
+        (prescription) => prescription.id === form.prescriptionId
+      )
+    ) {
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      prescriptionId: filteredPrescriptions[0]?.id || "",
+    }));
+  }, [filteredPrescriptions, form.patientId, form.prescriptionId]);
+
+  const resetForm = (
+    nextPatientId = patients[0]?.id || "",
+    nextPrescriptionId?: string
+  ) => {
+    const firstPrescription =
+      nextPrescriptionId ||
+      prescriptions.find((prescription) => prescription.patientId === nextPatientId)
+        ?.id ||
+      "";
+
     setForm({
-      ...initialPrescriptionForm(),
+      ...initialInvoiceForm(),
       patientId: nextPatientId,
+      prescriptionId: firstPrescription,
     });
-    setEditingPrescriptionId(null);
+    setEditingInvoiceId(null);
   };
 
   const handleEntityChange = (entityId: string) => {
     setActiveEntityId(entityId);
     resetForm("");
     router.replace(
-      `/dashboard/prescriptions${entityId ? `?entityId=${entityId}` : ""}`,
+      `/dashboard/invoices${entityId ? `?entityId=${entityId}` : ""}`,
       undefined,
       { shallow: true }
     );
   };
 
+  const handlePatientChange = (patientId: string) => {
+    const firstPrescription =
+      prescriptions.find((prescription) => prescription.patientId === patientId)
+        ?.id || "";
+
+    setForm((current) => ({
+      ...current,
+      patientId,
+      prescriptionId: firstPrescription,
+    }));
+  };
+
   const buildPayload = () => ({
-    entityId: activeEntityId,
     patientId: form.patientId,
-    title: form.title,
-    prescribedSessions: Number(form.prescribedSessions),
-    completedSessions: Number(form.completedSessions || 0),
-    startDate: form.startDate || null,
-    endDate: form.endDate || null,
+    prescriptionId: form.prescriptionId,
+    invoiceNumber: form.invoiceNumber,
     status: form.status,
-    notes: form.notes,
+    amountCents: amountToCents(form.amount),
+    currency: form.currency || "EUR",
+    issuedAt: form.issuedAt || null,
+    dueAt: form.dueAt || null,
+    paidAt: form.paidAt || null,
   });
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -293,8 +386,14 @@ export default function PrescriptionsDashboardPage() {
       return;
     }
 
-    if (!form.patientId) {
-      setError("Selectionnez un patient avant de creer une prescription.");
+    if (!form.patientId || !form.prescriptionId) {
+      setError("Selectionnez un patient et une prescription.");
+      return;
+    }
+
+    const amountCents = amountToCents(form.amount);
+    if (!Number.isInteger(amountCents) || amountCents < 0) {
+      setError("Le montant doit etre positif ou egal a zero.");
       return;
     }
 
@@ -305,77 +404,70 @@ export default function PrescriptionsDashboardPage() {
     const payload = buildPayload();
 
     try {
-      if (editingPrescriptionId) {
-        const updated = await request<Prescription>(
-          `/api/hugo/prescriptions/${editingPrescriptionId}`,
+      if (editingInvoiceId) {
+        const updated = await request<Invoice>(
+          `/api/hugo/invoices/${editingInvoiceId}`,
           {
             method: "PATCH",
             body: JSON.stringify(payload),
           }
         );
-        setPrescriptions((current) =>
-          current.map((prescription) =>
-            prescription.id === updated.id ? updated : prescription
-          )
+        setInvoices((current) =>
+          current.map((invoice) => (invoice.id === updated.id ? updated : invoice))
         );
-        setSuccess("Prescription mise a jour.");
+        setSuccess("Facture mise a jour.");
       } else {
-        const created = await request<Prescription>("/api/hugo/prescriptions", {
+        const created = await request<Invoice>("/api/hugo/invoices", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        setPrescriptions((current) => [created, ...current]);
-        setSuccess("Prescription creee.");
+        setInvoices((current) => [created, ...current]);
+        setSuccess("Facture creee.");
       }
 
-      resetForm(form.patientId);
+      resetForm(form.patientId, form.prescriptionId);
     } catch (saveError) {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : "Impossible d'enregistrer la prescription"
+          : "Impossible d'enregistrer la facture"
       );
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = (prescription: Prescription) => {
-    setEditingPrescriptionId(prescription.id);
-    setForm(formFromPrescription(prescription));
+  const handleEdit = (invoice: Invoice) => {
+    setEditingInvoiceId(invoice.id);
+    setForm(formFromInvoice(invoice));
     setError(null);
     setSuccess(null);
   };
 
-  const handleDelete = async (prescription: Prescription) => {
-    if (!activeEntityId) return;
-
-    setDeletingPrescriptionId(prescription.id);
+  const handleDelete = async (invoice: Invoice) => {
+    setDeletingInvoiceId(invoice.id);
     setError(null);
     setSuccess(null);
 
     try {
-      await request<{ id: string }>(
-        `/api/hugo/prescriptions/${prescription.id}?entityId=${encodeURIComponent(
-          activeEntityId
-        )}`,
-        { method: "DELETE" }
+      await request<{ id: string }>(`/api/hugo/invoices/${invoice.id}`, {
+        method: "DELETE",
+      });
+      setInvoices((current) =>
+        current.filter((currentInvoice) => currentInvoice.id !== invoice.id)
       );
-      setPrescriptions((current) =>
-        current.filter((currentPrescription) => currentPrescription.id !== prescription.id)
-      );
-      if (editingPrescriptionId === prescription.id) {
+      if (editingInvoiceId === invoice.id) {
         resetForm();
       }
-      setSuccess("Prescription supprimee.");
+      setSuccess("Facture supprimee.");
     } catch (deleteError) {
       setError(
         deleteError instanceof Error
           ? deleteError.message
-          : "Impossible de supprimer la prescription"
+          : "Impossible de supprimer la facture"
       );
     } finally {
-      setDeletingPrescriptionId(null);
+      setDeletingInvoiceId(null);
     }
   };
 
@@ -385,33 +477,17 @@ export default function PrescriptionsDashboardPage() {
         <nav className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-5">
           <LogoMark />
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard")}
-              className={BUTTON_LIGHT}
-            >
+            <button type="button" onClick={() => router.push("/dashboard")} className={BUTTON_LIGHT}>
               Cockpit
             </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/patients")}
-              className={BUTTON_LIGHT}
-            >
+            <button type="button" onClick={() => router.push("/dashboard/patients")} className={BUTTON_LIGHT}>
               Patients
             </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/sessions")}
-              className={BUTTON_LIGHT}
-            >
-              Séances
+            <button type="button" onClick={() => router.push("/dashboard/prescriptions")} className={BUTTON_LIGHT}>
+              Prescriptions
             </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/invoices")}
-              className={BUTTON_LIGHT}
-            >
-              Factures
+            <button type="button" onClick={() => router.push("/dashboard/sessions")} className={BUTTON_LIGHT}>
+              Séances
             </button>
           </div>
         </nav>
@@ -422,14 +498,14 @@ export default function PrescriptionsDashboardPage() {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Prescriptions
+                Factures
               </p>
               <h1 className="mt-3 text-3xl font-bold tracking-[-0.04em]">
-                Suivi des prescriptions
+                Suivi des factures
               </h1>
               <p className="mt-2 max-w-2xl text-sm font-medium leading-6 text-black/50">
-                Un espace simple pour suivre les seances prevues, realisees et
-                restantes par patient.
+                Un espace simple pour preparer, suivre et mettre a jour les
+                factures du cabinet.
               </p>
             </div>
 
@@ -470,12 +546,10 @@ export default function PrescriptionsDashboardPage() {
         <section className="mt-4 grid gap-4 xl:grid-cols-[0.95fr_1.25fr]">
           <div className={cn(CARD, "p-5")}>
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-              {editingPrescriptionId ? "Edition" : "Nouvelle prescription"}
+              {editingInvoiceId ? "Edition" : "Nouvelle facture"}
             </p>
             <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em]">
-              {editingPrescriptionId
-                ? "Modifier la prescription"
-                : "Ajouter une prescription"}
+              {editingInvoiceId ? "Modifier la facture" : "Ajouter une facture"}
             </h2>
 
             <form onSubmit={handleSubmit} className="mt-5 grid gap-4">
@@ -485,12 +559,7 @@ export default function PrescriptionsDashboardPage() {
                 </span>
                 <select
                   value={form.patientId}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      patientId: event.target.value,
-                    }))
-                  }
+                  onChange={(event) => handlePatientChange(event.target.value)}
                   className={INPUT}
                   required
                 >
@@ -505,147 +574,182 @@ export default function PrescriptionsDashboardPage() {
 
               <label>
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                  Titre
+                  Prescription
                 </span>
-                <input
-                  value={form.title}
+                <select
+                  value={form.prescriptionId}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
-                      title: event.target.value,
+                      prescriptionId: event.target.value,
                     }))
                   }
                   className={INPUT}
                   required
-                />
-              </label>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Seances prevues
-                  </span>
-                  <input
-                    value={form.prescribedSessions}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        prescribedSessions: event.target.value,
-                      }))
-                    }
-                    className={INPUT}
-                    min={1}
-                    required
-                    type="number"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Seances realisees
-                  </span>
-                  <input
-                    value={form.completedSessions}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        completedSessions: event.target.value,
-                      }))
-                    }
-                    className={INPUT}
-                    min={0}
-                    type="number"
-                  />
-                </label>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Debut
-                  </span>
-                  <input
-                    value={form.startDate}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        startDate: event.target.value,
-                      }))
-                    }
-                    className={INPUT}
-                    type="date"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Fin
-                  </span>
-                  <input
-                    value={form.endDate}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        endDate: event.target.value,
-                      }))
-                    }
-                    className={INPUT}
-                    type="date"
-                  />
-                </label>
-              </div>
-
-              <label>
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                  Statut
-                </span>
-                <select
-                  value={form.status}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      status: event.target.value as PrescriptionStatus,
-                    }))
-                  }
-                  className={INPUT}
                 >
-                  {STATUS_OPTIONS.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
+                  {!filteredPrescriptions.length && (
+                    <option value="">Aucune prescription</option>
+                  )}
+                  {filteredPrescriptions.map((prescription) => (
+                    <option key={prescription.id} value={prescription.id}>
+                      {prescription.title}
                     </option>
                   ))}
                 </select>
               </label>
 
-              <label>
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                  Notes
-                </span>
-                <textarea
-                  value={form.notes}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      notes: event.target.value,
-                    }))
-                  }
-                  className={cn(INPUT, "min-h-[110px] resize-none")}
-                />
-              </label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                    Numero
+                  </span>
+                  <input
+                    value={form.invoiceNumber}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        invoiceNumber: event.target.value,
+                      }))
+                    }
+                    className={INPUT}
+                    placeholder="Optionnel"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                    Statut
+                  </span>
+                  <select
+                    value={form.status}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        status: event.target.value as InvoiceStatus,
+                      }))
+                    }
+                    className={INPUT}
+                  >
+                    {STATUS_OPTIONS.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-[1fr_0.55fr]">
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                    Montant
+                  </span>
+                  <input
+                    value={form.amount}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        amount: event.target.value,
+                      }))
+                    }
+                    className={INPUT}
+                    min={0}
+                    step="0.01"
+                    type="number"
+                    required
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                    Devise
+                  </span>
+                  <input
+                    value={form.currency}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        currency: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    className={INPUT}
+                    maxLength={3}
+                    required
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                    Emise
+                  </span>
+                  <input
+                    value={form.issuedAt}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        issuedAt: event.target.value,
+                      }))
+                    }
+                    className={INPUT}
+                    type="date"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                    Due
+                  </span>
+                  <input
+                    value={form.dueAt}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        dueAt: event.target.value,
+                      }))
+                    }
+                    className={INPUT}
+                    type="date"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
+                    Payee
+                  </span>
+                  <input
+                    value={form.paidAt}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        paidAt: event.target.value,
+                      }))
+                    }
+                    className={INPUT}
+                    type="date"
+                  />
+                </label>
+              </div>
 
               <div className="flex flex-wrap gap-3">
                 <button
                   type="submit"
-                  disabled={saving || !activeEntityId || !patients.length}
+                  disabled={
+                    saving ||
+                    !activeEntityId ||
+                    !patients.length ||
+                    !filteredPrescriptions.length
+                  }
                   className={BUTTON_DARK}
                 >
                   {saving
                     ? "Enregistrement..."
-                    : editingPrescriptionId
+                    : editingInvoiceId
                     ? "Mettre a jour"
-                    : "Creer la prescription"}
+                    : "Creer la facture"}
                 </button>
-                {editingPrescriptionId && (
+                {editingInvoiceId && (
                   <button
                     type="button"
                     onClick={() => resetForm()}
@@ -662,11 +766,11 @@ export default function PrescriptionsDashboardPage() {
             <div className="flex flex-col gap-2 border-b border-black/5 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <h2 className="text-xl font-semibold tracking-[-0.03em]">
-                  Prescriptions
+                  Factures
                 </h2>
                 <p className="mt-1 text-sm font-medium text-black/45">
-                  {activeEntity?.name || "Cabinet"} - {prescriptions.length} prescription
-                  {prescriptions.length > 1 ? "s" : ""}
+                  {activeEntity?.name || "Cabinet"} - {invoices.length} facture
+                  {invoices.length > 1 ? "s" : ""}
                 </p>
               </div>
               <button
@@ -687,77 +791,69 @@ export default function PrescriptionsDashboardPage() {
                   ))}
                 </div>
               </div>
-            ) : !prescriptions.length ? (
+            ) : !invoices.length ? (
               <div className="px-5 py-14 text-center">
-                <p className="text-base font-semibold">Aucune prescription.</p>
+                <p className="text-base font-semibold">Aucune facture.</p>
                 <p className="mt-2 text-sm font-medium text-black/50">
-                  Ajoutez une prescription pour suivre les seances restantes.
+                  Creez une premiere facture pour commencer le suivi.
                 </p>
               </div>
             ) : (
               <div className="divide-y divide-black/5">
-                {prescriptions.map((prescription) => {
-                  const remainingSessions = Math.max(
-                    0,
-                    prescription.prescribedSessions - prescription.completedSessions
-                  );
-
-                  return (
-                    <div
-                      key={prescription.id}
-                      className="grid gap-4 px-5 py-5 transition hover:bg-black/[0.02] lg:grid-cols-[1fr_auto]"
-                    >
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-semibold">{prescription.title}</p>
-                          <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/55">
-                            {prescription.status}
-                          </span>
-                        </div>
-
-                        <p className="mt-2 text-sm font-semibold text-black/60">
-                          {patientDisplayName(prescription.patient)}
+                {invoices.map((invoice) => (
+                  <div
+                    key={invoice.id}
+                    className="grid gap-4 px-5 py-5 transition hover:bg-black/[0.02] lg:grid-cols-[1fr_auto]"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold">
+                          {invoice.invoiceNumber || "Facture sans numero"}
                         </p>
-
-                        <div className="mt-3 grid gap-2 text-xs font-medium text-black/50 sm:grid-cols-2">
-                          <span>
-                            {prescription.completedSessions}/
-                            {prescription.prescribedSessions} seances realisees
-                          </span>
-                          <span>{remainingSessions} restantes</span>
-                          <span>Debut {formatDate(prescription.startDate)}</span>
-                          <span>Fin {formatDate(prescription.endDate)}</span>
-                        </div>
-
-                        {prescription.notes && (
-                          <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-black/50">
-                            {prescription.notes}
-                          </p>
-                        )}
+                        <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/55">
+                          {invoice.status}
+                        </span>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(prescription)}
-                          className={BUTTON_LIGHT}
-                        >
-                          Modifier
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(prescription)}
-                          disabled={deletingPrescriptionId === prescription.id}
-                          className="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {deletingPrescriptionId === prescription.id
-                            ? "Suppression..."
-                            : "Supprimer"}
-                        </button>
+                      <p className="mt-2 text-sm font-medium text-black/55">
+                        {patientDisplayName(invoice.patient)} -{" "}
+                        {invoice.prescription?.title || "Prescription"}
+                      </p>
+
+                      <div className="mt-3 grid gap-2 text-xs font-medium text-black/45 sm:grid-cols-2">
+                        <span>
+                          Montant :{" "}
+                          <strong className="text-black/70">
+                            {formatAmount(invoice.amountCents, invoice.currency)}
+                          </strong>
+                        </span>
+                        <span>Emise : {formatDate(invoice.issuedAt)}</span>
+                        <span>Due : {formatDate(invoice.dueAt)}</span>
+                        <span>Payee : {formatDate(invoice.paidAt)}</span>
                       </div>
                     </div>
-                  );
-                })}
+
+                    <div className="flex flex-wrap gap-2 lg:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleEdit(invoice)}
+                        className={BUTTON_LIGHT}
+                      >
+                        Modifier
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(invoice)}
+                        disabled={deletingInvoiceId === invoice.id}
+                        className={BUTTON_LIGHT}
+                      >
+                        {deletingInvoiceId === invoice.id
+                          ? "Suppression..."
+                          : "Supprimer"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

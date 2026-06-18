@@ -4,10 +4,10 @@ import { useRouter } from "next/router";
 type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
 type TherapySessionStatus = "PLANNED" | "COMPLETED" | "CANCELLED" | "MISSED";
 
-interface EntityListItem {
-  id: string;
+interface Cabinet {
+  cabinetId: string;
   name: string;
-  isActive: boolean;
+  organizationId: string;
 }
 
 interface Patient {
@@ -163,7 +163,7 @@ function formFromSession(session: TherapySession): SessionForm {
 
 export default function SessionsDashboardPage() {
   const router = useRouter();
-  const [entities, setEntities] = useState<EntityListItem[]>([]);
+  const [cabinet, setCabinet] = useState<Cabinet | null>(null);
   const [activeEntityId, setActiveEntityId] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
@@ -178,8 +178,8 @@ export default function SessionsDashboardPage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const activeEntity = useMemo(
-    () => entities.find((entity) => entity.id === activeEntityId) || null,
-    [activeEntityId, entities]
+    () => (cabinet?.cabinetId === activeEntityId ? cabinet : null),
+    [activeEntityId, cabinet]
   );
 
   const filteredPrescriptions = useMemo(
@@ -250,13 +250,13 @@ export default function SessionsDashboardPage() {
     setError(null);
 
     try {
-      const data = await request<EntityListItem[]>("/api/entities");
-      setEntities(data);
+      const data = await request<Cabinet>("/api/hugo/cabinet");
+      setCabinet(data);
 
       const queryEntityId =
         typeof router.query.entityId === "string" ? router.query.entityId : "";
       const resolvedEntityId =
-        data.find((entity) => entity.id === queryEntityId)?.id || data[0]?.id || "";
+        queryEntityId === data.cabinetId ? queryEntityId : data.cabinetId;
 
       setActiveEntityId(resolvedEntityId);
     } catch (loadError) {
@@ -498,8 +498,8 @@ export default function SessionsDashboardPage() {
             <button type="button" onClick={() => router.push("/dashboard/prescriptions")} className={BUTTON_LIGHT}>
               Prescriptions
             </button>
-            <button type="button" onClick={() => router.push("/dashboard/users")} className={BUTTON_LIGHT}>
-              Acces
+            <button type="button" onClick={() => router.push("/dashboard/invoices")} className={BUTTON_LIGHT}>
+              Factures
             </button>
           </div>
         </nav>
@@ -528,15 +528,13 @@ export default function SessionsDashboardPage() {
               <select
                 value={activeEntityId}
                 onChange={(event) => handleEntityChange(event.target.value)}
-                disabled={loadingEntities || !entities.length}
+                disabled={loadingEntities || !cabinet}
                 className={INPUT}
               >
-                {!entities.length && <option value="">Aucun cabinet</option>}
-                {entities.map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {entity.name}
-                  </option>
-                ))}
+                {!cabinet && <option value="">Aucun cabinet</option>}
+                {cabinet && (
+                  <option value={cabinet.cabinetId}>{cabinet.name}</option>
+                )}
               </select>
             </label>
           </div>

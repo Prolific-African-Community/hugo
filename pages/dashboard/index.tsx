@@ -251,6 +251,9 @@ export default function WorkspaceDashboard() {
             <NavButton onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}>
               Séances
             </NavButton>
+            <NavButton onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}>
+              Factures
+            </NavButton>
           </div>
         </nav>
       </header>
@@ -340,6 +343,13 @@ export default function WorkspaceDashboard() {
                 className={BUTTON_LIGHT}
               >
                 Ajouter séance
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
+                className={BUTTON_LIGHT}
+              >
+                Ajouter facture
               </button>
             </div>
             <div className="mt-6 border-t border-black/5 pt-5">
