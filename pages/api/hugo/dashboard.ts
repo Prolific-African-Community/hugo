@@ -4,6 +4,34 @@ import { AuthenticatedNextApiRequest, withAuth } from "../../../lib/auth";
 import { requireHugoCabinet } from "../../../lib/hugo-auth";
 import { prisma } from "../../../lib/prisma";
 
+const patientSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+};
+
+const prescriptionSelect = {
+  id: true,
+  title: true,
+  prescribedSessions: true,
+  completedSessions: true,
+  status: true,
+};
+
+const sessionSelect = {
+  id: true,
+  sessionNumber: true,
+  scheduledAt: true,
+  completedAt: true,
+  status: true,
+  patient: {
+    select: patientSelect,
+  },
+  prescription: {
+    select: prescriptionSelect,
+  },
+};
+
 const getDashboard = async (
   req: AuthenticatedNextApiRequest,
   res: NextApiResponse
@@ -14,79 +42,107 @@ const getDashboard = async (
     return jsonError(res, 404, "Cabinet not found");
   }
 
-  const [patients, prescriptions, sessions] = await Promise.all([
-    prisma.patient.findMany({
-      where: { entityId: cabinet.cabinetId },
-      orderBy: { updatedAt: "desc" },
+  const now = new Date();
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date(startOfToday);
+  endOfToday.setDate(endOfToday.getDate() + 1);
+
+  const [
+    activePatientsCount,
+    activePrescriptionsCount,
+    upcomingSessionsCount,
+    todaySessions,
+    upcomingSessions,
+    activePrescriptionSummaries,
+    recentPatients,
+  ] = await Promise.all([
+    prisma.patient.count({
+      where: { entityId: cabinet.cabinetId, status: "ACTIVE" },
     }),
-    prisma.prescription.findMany({
-      where: { entityId: cabinet.cabinetId },
-      include: {
-        patient: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
+    prisma.prescription.count({
+      where: { entityId: cabinet.cabinetId, status: "ACTIVE" },
+    }),
+    prisma.therapySession.count({
+      where: {
+        entityId: cabinet.cabinetId,
+        status: "PLANNED",
+        scheduledAt: { gte: now },
       },
-      orderBy: { updatedAt: "desc" },
     }),
     prisma.therapySession.findMany({
-      where: { entityId: cabinet.cabinetId },
-      include: {
-        patient: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-        prescription: {
-          select: {
-            id: true,
-            title: true,
-            prescribedSessions: true,
-            completedSessions: true,
-            status: true,
-          },
+      where: {
+        entityId: cabinet.cabinetId,
+        status: "PLANNED",
+        scheduledAt: {
+          gte: startOfToday,
+          lt: endOfToday,
         },
       },
-      orderBy: { scheduledAt: "desc" },
+      select: sessionSelect,
+      orderBy: { scheduledAt: "asc" },
+      take: 5,
+    }),
+    prisma.therapySession.findMany({
+      where: {
+        entityId: cabinet.cabinetId,
+        status: "PLANNED",
+        scheduledAt: { gte: now },
+      },
+      select: sessionSelect,
+      orderBy: { scheduledAt: "asc" },
+      take: 5,
+    }),
+    prisma.prescription.findMany({
+      where: { entityId: cabinet.cabinetId, status: "ACTIVE" },
+      select: {
+        ...prescriptionSelect,
+        patient: {
+          select: patientSelect,
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.patient.findMany({
+      where: { entityId: cabinet.cabinetId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        status: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 5,
     }),
   ]);
 
-  const now = new Date();
-  const activePrescriptions = prescriptions.filter(
-    (prescription) => prescription.status === "ACTIVE"
+  const nearlyCompletedPrescriptionSummaries = activePrescriptionSummaries.filter(
+    (prescription) => {
+      const remaining =
+        prescription.prescribedSessions - prescription.completedSessions;
+      return remaining > 0 && remaining <= 2;
+    }
   );
-  const upcomingSessions = sessions.filter((session) => {
-    if (session.status !== "PLANNED") return false;
-    if (!session.scheduledAt) return true;
-    return session.scheduledAt.getTime() >= now.getTime();
-  });
-  const almostDonePrescriptions = activePrescriptions.filter((prescription) => {
-    const remaining =
-      prescription.prescribedSessions - prescription.completedSessions;
-    return remaining > 0 && remaining <= 2;
-  });
+  const nearlyCompletedPrescriptions =
+    nearlyCompletedPrescriptionSummaries.slice(0, 5);
 
   return jsonSuccess(res, {
     cabinet: {
       cabinetId: cabinet.cabinetId,
       name: cabinet.cabinetName,
-      organizationId: cabinet.organizationId,
     },
-    patients,
-    prescriptions,
-    sessions,
     metrics: {
-      activePatients: patients.filter((patient) => patient.status === "ACTIVE")
-        .length,
-      activePrescriptions: activePrescriptions.length,
-      upcomingSessions: upcomingSessions.length,
-      almostDonePrescriptions: almostDonePrescriptions.length,
+      activePatientsCount,
+      activePrescriptionsCount,
+      upcomingSessionsCount,
+      nearlyCompletedPrescriptionsCount:
+        nearlyCompletedPrescriptionSummaries.length,
     },
+    todaySessions,
+    upcomingSessions,
+    nearlyCompletedPrescriptions,
+    recentPatients,
   });
 };
 

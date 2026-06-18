@@ -1,11 +1,68 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
-interface EntityListItem {
-  id: string;
+type PatientStatus = "ACTIVE" | "INACTIVE" | "ARCHIVED";
+type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
+type TherapySessionStatus = "PLANNED" | "COMPLETED" | "CANCELLED" | "MISSED";
+
+interface Cabinet {
+  cabinetId: string;
   name: string;
-  isActive: boolean;
-  documentsCount: number;
+}
+
+interface Patient {
+  id: string;
+  firstName: string;
+  lastName: string;
+  status: PatientStatus;
+  updatedAt: string;
+}
+
+interface Prescription {
+  id: string;
+  title: string;
+  status: PrescriptionStatus;
+  prescribedSessions: number;
+  completedSessions: number;
+  patient?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+  } | null;
+}
+
+interface TherapySession {
+  id: string;
+  sessionNumber: number;
+  scheduledAt?: string | null;
+  status: TherapySessionStatus;
+  patient?: {
+    firstName: string;
+    lastName: string;
+  } | null;
+  prescription?: {
+    id: string;
+    title: string;
+    prescribedSessions: number;
+    completedSessions: number;
+    status: PrescriptionStatus;
+  } | null;
+}
+
+interface DashboardMetrics {
+  activePatientsCount: number;
+  activePrescriptionsCount: number;
+  upcomingSessionsCount: number;
+  nearlyCompletedPrescriptionsCount: number;
+}
+
+interface DashboardPayload {
+  cabinet: Cabinet;
+  metrics: DashboardMetrics;
+  todaySessions: TherapySession[];
+  upcomingSessions: TherapySession[];
+  nearlyCompletedPrescriptions: Prescription[];
+  recentPatients: Patient[];
 }
 
 interface ApiResponse<T> {
@@ -22,6 +79,8 @@ const CARD =
   "rounded-[1.25rem] border border-black/10 bg-white shadow-[0_14px_40px_rgba(15,23,42,0.055)]";
 const BUTTON_DARK =
   "inline-flex items-center justify-center rounded-full bg-black px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-slate-800 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50";
+const BUTTON_LIGHT =
+  "inline-flex items-center justify-center rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50";
 
 function LogoMark() {
   return (
@@ -35,7 +94,21 @@ function LogoMark() {
   );
 }
 
-function CockpitCard({
+function NavButton({
+  children,
+  onClick,
+}: {
+  children: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} className={BUTTON_LIGHT}>
+      {children}
+    </button>
+  );
+}
+
+function MetricCard({
   label,
   value,
   detail,
@@ -47,9 +120,9 @@ function CockpitCard({
   accent?: boolean;
 }) {
   return (
-    <div className={cn(CARD, "min-h-[168px] p-5")}>
+    <div className={cn(CARD, "min-h-[150px] p-5")}>
       <div className="flex items-start justify-between gap-4">
-        <p className="max-w-[10rem] text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
+        <p className="max-w-[11rem] text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
           {label}
         </p>
         <span
@@ -59,18 +132,42 @@ function CockpitCard({
           )}
         />
       </div>
-      <p className="mt-8 text-4xl font-bold tracking-[-0.05em]">{value}</p>
+      <p className="mt-7 text-4xl font-bold tracking-[-0.05em]">{value}</p>
       <p className="mt-3 text-sm font-medium leading-6 text-black/50">{detail}</p>
     </div>
   );
 }
 
+function formatSessionDate(value?: string | null) {
+  if (!value) return "Date a definir";
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Date a definir"
+    : new Intl.DateTimeFormat("fr-LU", {
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
+}
+
+function patientName(session: TherapySession) {
+  if (!session.patient) return "Patient";
+  return `${session.patient.firstName} ${session.patient.lastName}`.trim();
+}
+
 export default function WorkspaceDashboard() {
   const router = useRouter();
-  const [cabinets, setCabinets] = useState<EntityListItem[]>([]);
+  const [cabinet, setCabinet] = useState<Cabinet | null>(null);
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [todaySessions, setTodaySessions] = useState<TherapySession[]>([]);
+  const [upcomingSessions, setUpcomingSessions] = useState<TherapySession[]>([]);
+  const [nearlyCompletedPrescriptions, setNearlyCompletedPrescriptions] =
+    useState<Prescription[]>([]);
+  const [recentPatients, setRecentPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [canManageUsers, setCanManageUsers] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const request = async <T,>(url: string, options: RequestInit = {}) => {
@@ -104,15 +201,17 @@ export default function WorkspaceDashboard() {
   };
 
   const loadCockpit = async (showRefresh = false) => {
-    if (showRefresh) {
-      setRefreshing(true);
-    }
-
+    if (showRefresh) setRefreshing(true);
     setError(null);
 
     try {
-      const data = await request<EntityListItem[]>("/api/entities");
-      setCabinets(data);
+      const data = await request<DashboardPayload>("/api/hugo/dashboard");
+      setCabinet(data.cabinet);
+      setMetrics(data.metrics);
+      setTodaySessions(data.todaySessions);
+      setUpcomingSessions(data.upcomingSessions);
+      setNearlyCompletedPrescriptions(data.nearlyCompletedPrescriptions);
+      setRecentPatients(data.recentPatients);
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -130,47 +229,9 @@ export default function WorkspaceDashboard() {
     loadCockpit();
   }, [router.isReady]);
 
-  useEffect(() => {
-    if (!router.isReady) return;
-
-    const role = localStorage.getItem("role");
-
-    if (role === "ADMIN") {
-      setCanManageUsers(true);
-      return;
-    }
-
-    const probeUserManagement = async () => {
-      try {
-        await request("/api/organization/users");
-        setCanManageUsers(true);
-      } catch {
-        setCanManageUsers(false);
-      }
-    };
-
-    probeUserManagement();
-  }, [router.isReady]);
-
-  const cockpit = useMemo(() => {
-    const activeCabinets = cabinets.filter((cabinet) => cabinet.isActive).length;
-    const documents = cabinets.reduce(
-      (sum, cabinet) => sum + cabinet.documentsCount,
-      0
-    );
-
-    return {
-      appointmentsToday: 0,
-      activeClients: activeCabinets,
-      sessionsToFollow: documents,
-      invoicesToPrepare: 0,
-    };
-  }, [cabinets]);
-
-  const handleLogout = () => {
-    localStorage.clear();
-    router.replace("/login");
-  };
+  const entityQuery = cabinet
+    ? `?entityId=${encodeURIComponent(cabinet.cabinetId)}`
+    : "";
 
   return (
     <div className={cn(PAGE_BG, "min-h-screen text-black")}>
@@ -178,43 +239,18 @@ export default function WorkspaceDashboard() {
         <nav className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-5">
           <LogoMark />
           <div className="flex flex-wrap gap-3">
-            {canManageUsers && (
-              <button
-                type="button"
-                onClick={() => router.push("/dashboard/users")}
-                className="rounded-full border border-black/10 px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white"
-              >
-                Acces
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/patients")}
-              className="rounded-full border border-black/10 px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white"
-            >
+            <NavButton onClick={() => router.push("/dashboard")}>Cockpit</NavButton>
+            <NavButton onClick={() => router.push(`/dashboard/patients${entityQuery}`)}>
               Patients
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/prescriptions")}
-              className="rounded-full border border-black/10 px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white"
+            </NavButton>
+            <NavButton
+              onClick={() => router.push(`/dashboard/prescriptions${entityQuery}`)}
             >
               Prescriptions
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/sessions")}
-              className="rounded-full border border-black/10 px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white"
-            >
+            </NavButton>
+            <NavButton onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}>
               Séances
-            </button>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="rounded-full border border-black px-4 py-2 text-xs font-bold text-black transition hover:bg-black hover:text-white"
-            >
-              Deconnexion
-            </button>
+            </NavButton>
           </div>
         </nav>
       </header>
@@ -224,14 +260,14 @@ export default function WorkspaceDashboard() {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Cockpit Hugo
+                Cockpit
               </p>
               <h1 className="mt-3 text-3xl font-bold tracking-[-0.04em]">
-                Vue du cabinet
+                Aujourd'hui
               </h1>
               <p className="mt-2 max-w-2xl text-sm font-medium leading-6 text-black/50">
-                Un espace temporaire propre pour suivre les priorites du jour,
-                les clients, les documents et les prochaines actions.
+                {cabinet?.name || "Cabinet"} - l'essentiel pour garder la
+                journee lisible.
               </p>
             </div>
 
@@ -255,76 +291,157 @@ export default function WorkspaceDashboard() {
         )}
 
         <section className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <CockpitCard
-            label="Rendez-vous du jour"
-            value={loading ? "..." : cockpit.appointmentsToday}
-            detail="Planning a connecter lors de la prochaine phase metier."
+          <MetricCard
+            label="Résumé du jour"
+            value={loading ? "..." : todaySessions.length}
+            detail="seance(s) planifiee(s) aujourd'hui"
             accent
           />
-          <CockpitCard
-            label="Clients actifs"
-            value={loading ? "..." : cockpit.activeClients}
-            detail="Base existante affichee sous forme de cabinets provisoires."
+          <MetricCard
+            label="Patients actifs"
+            value={loading ? "..." : metrics?.activePatientsCount ?? 0}
+            detail="patients suivis dans le cabinet"
           />
-          <CockpitCard
-            label="Seances a suivre"
-            value={loading ? "..." : cockpit.sessionsToFollow}
-            detail="Indicateur temporaire base sur les documents disponibles."
+          <MetricCard
+            label="Prescriptions actives"
+            value={loading ? "..." : metrics?.activePrescriptionsCount ?? 0}
+            detail="prescriptions encore ouvertes"
           />
-          <CockpitCard
-            label="Factures a preparer"
-            value={loading ? "..." : cockpit.invoicesToPrepare}
-            detail="Module facture conserve pour une phase ulterieure."
+          <MetricCard
+            label="Séances à venir"
+            value={loading ? "..." : metrics?.upcomingSessionsCount ?? 0}
+            detail="prochaines seances a garder en vue"
           />
         </section>
 
-        <section className={cn(CARD, "mt-4 overflow-hidden")}>
-          <div className="border-b border-black/5 px-6 py-5">
-            <h2 className="text-lg font-semibold tracking-[-0.03em]">
-              Cabinets disponibles
-            </h2>
+        <section className="mt-4 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className={cn(CARD, "p-5")}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
+              Actions rapides
+            </p>
+            <div className="mt-5 grid gap-3">
+              <button
+                type="button"
+                onClick={() => router.push(`/dashboard/patients${entityQuery}`)}
+                className={BUTTON_DARK}
+              >
+                Ajouter patient
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/dashboard/prescriptions${entityQuery}`)}
+                className={BUTTON_LIGHT}
+              >
+                Ajouter prescription
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
+                className={BUTTON_LIGHT}
+              >
+                Ajouter séance
+              </button>
+            </div>
+            <div className="mt-6 border-t border-black/5 pt-5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/40">
+                Patients récents
+              </p>
+              {!recentPatients.length ? (
+                <p className="mt-4 text-sm font-medium text-black/45">
+                  Aucun patient récent.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {recentPatients.map((patient) => (
+                    <div
+                      key={patient.id}
+                      className="flex items-center justify-between gap-3 text-sm"
+                    >
+                      <span className="font-semibold">
+                        {patient.firstName} {patient.lastName}
+                      </span>
+                      <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/45">
+                        {patient.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
+          <div className={cn(CARD, "overflow-hidden")}>
+            <div className="border-b border-black/5 px-5 py-4">
+              <h2 className="text-xl font-semibold tracking-[-0.03em]">
+                Prescriptions presque terminées
+              </h2>
+            </div>
+            {!nearlyCompletedPrescriptions.length ? (
+              <p className="px-5 py-10 text-sm font-medium text-black/45">
+                Rien d'urgent pour le moment.
+              </p>
+            ) : (
+              <div className="divide-y divide-black/5">
+                {nearlyCompletedPrescriptions.map((prescription) => {
+                  const remaining =
+                    prescription.prescribedSessions -
+                    prescription.completedSessions;
+
+                  return (
+                    <div key={prescription.id} className="px-5 py-4">
+                      <p className="font-semibold">{prescription.title}</p>
+                      <p className="mt-1 text-xs font-medium text-black/45">
+                        {prescription.patient
+                          ? `${prescription.patient.firstName} ${prescription.patient.lastName} · `
+                          : ""}
+                        {remaining} seance{remaining > 1 ? "s" : ""} restante
+                        {remaining > 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className={cn(CARD, "mt-4 overflow-hidden")}>
+          <div className="border-b border-black/5 px-5 py-4">
+            <h2 className="text-xl font-semibold tracking-[-0.03em]">
+              Prochaines séances
+            </h2>
+          </div>
           {loading ? (
-            <div className="px-6 py-12">
+            <div className="px-5 py-10">
               <div className="animate-pulse space-y-3">
-                {Array.from({ length: 4 }).map((_, index) => (
-                  <div key={index} className="h-12 rounded-2xl bg-black/5" />
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <div key={index} className="h-14 rounded-2xl bg-black/5" />
                 ))}
               </div>
             </div>
-          ) : !cabinets.length ? (
-            <div className="px-6 py-14 text-center">
-              <p className="text-base font-semibold">
-                Aucun cabinet disponible pour le moment.
-              </p>
-              <p className="mt-2 text-sm font-medium text-black/50">
-                La creation des donnees metier Hugo viendra dans une phase
-                separee.
-              </p>
-            </div>
+          ) : !upcomingSessions.length ? (
+            <p className="px-5 py-10 text-sm font-medium text-black/45">
+              Aucune seance a venir pour l'instant.
+            </p>
           ) : (
             <div className="divide-y divide-black/5">
-              {cabinets.map((cabinet) => (
+              {upcomingSessions.map((session) => (
                 <div
-                  key={cabinet.id}
-                  className="flex flex-col gap-4 px-6 py-5 transition hover:bg-black/[0.02] sm:flex-row sm:items-center sm:justify-between"
+                  key={session.id}
+                  className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div>
-                    <p className="font-semibold">{cabinet.name}</p>
+                    <p className="font-semibold">
+                      {patientName(session)} - seance {session.sessionNumber}
+                    </p>
                     <p className="mt-1 text-xs font-medium text-black/45">
-                      {cabinet.documentsCount} document
-                      {cabinet.documentsCount > 1 ? "s" : ""} disponible
-                      {cabinet.documentsCount > 1 ? "s" : ""}
+                      {session.prescription?.title || "Prescription"} ·{" "}
+                      {formatSessionDate(session.scheduledAt)}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/dashboard/entity/${cabinet.id}`)}
-                    className="w-fit rounded-full border border-black/10 px-3 py-2 text-[10px] font-semibold transition hover:border-black hover:bg-black hover:text-white"
-                  >
-                    Ouvrir
-                  </button>
+                  <span className="w-fit rounded-full bg-[#f4f4f7] px-3 py-1 text-[10px] font-semibold text-black/55">
+                    {session.status}
+                  </span>
                 </div>
               ))}
             </div>
