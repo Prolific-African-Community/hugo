@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 
 type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
+type TherapySessionStatus = "PLANNED" | "COMPLETED" | "CANCELLED" | "MISSED";
 
 interface EntityListItem {
   id: string;
@@ -17,27 +18,35 @@ interface Patient {
 
 interface Prescription {
   id: string;
-  entityId: string;
   patientId: string;
-  patient: Patient;
   title: string;
   prescribedSessions: number;
   completedSessions: number;
-  startDate?: string | null;
-  endDate?: string | null;
   status: PrescriptionStatus;
+}
+
+interface TherapySession {
+  id: string;
+  entityId: string;
+  patientId: string;
+  prescriptionId: string;
+  patient: Patient;
+  prescription: Prescription | null;
+  sessionNumber: number;
+  scheduledAt?: string | null;
+  completedAt?: string | null;
+  status: TherapySessionStatus;
   notes?: string | null;
   updatedAt: string;
 }
 
-interface PrescriptionForm {
+interface SessionForm {
   patientId: string;
-  title: string;
-  prescribedSessions: string;
-  completedSessions: string;
-  startDate: string;
-  endDate: string;
-  status: PrescriptionStatus;
+  prescriptionId: string;
+  sessionNumber: string;
+  scheduledAt: string;
+  completedAt: string;
+  status: TherapySessionStatus;
   notes: string;
 }
 
@@ -60,21 +69,20 @@ const BUTTON_DARK =
 const BUTTON_LIGHT =
   "inline-flex items-center justify-center rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50";
 
-const STATUS_OPTIONS: PrescriptionStatus[] = [
-  "ACTIVE",
+const STATUS_OPTIONS: TherapySessionStatus[] = [
+  "PLANNED",
   "COMPLETED",
-  "EXPIRED",
   "CANCELLED",
+  "MISSED",
 ];
 
-const initialPrescriptionForm = (): PrescriptionForm => ({
+const initialSessionForm = (): SessionForm => ({
   patientId: "",
-  title: "",
-  prescribedSessions: "10",
-  completedSessions: "0",
-  startDate: "",
-  endDate: "",
-  status: "ACTIVE",
+  prescriptionId: "",
+  sessionNumber: "1",
+  scheduledAt: "",
+  completedAt: "",
+  status: "PLANNED",
   notes: "",
 });
 
@@ -95,7 +103,7 @@ function patientDisplayName(patient?: Patient | null) {
   return `${patient.firstName} ${patient.lastName}`.trim();
 }
 
-function formatDate(value?: string | null) {
+function formatDateTime(value?: string | null) {
   if (!value) return "-";
 
   const date = new Date(value);
@@ -105,51 +113,89 @@ function formatDate(value?: string | null) {
         day: "2-digit",
         month: "short",
         year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
       }).format(date);
 }
 
-function dateInputValue(value?: string | null) {
+function dateTimeInputValue(value?: string | null) {
   if (!value) return "";
 
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-function formFromPrescription(prescription: Prescription): PrescriptionForm {
+function remainingSessions(prescription?: Prescription | null) {
+  if (!prescription) return 0;
+  return Math.max(
+    0,
+    prescription.prescribedSessions - prescription.completedSessions
+  );
+}
+
+function isPrescriptionComplete(prescription?: Prescription | null) {
+  return Boolean(prescription) && (
+    remainingSessions(prescription) === 0 || prescription?.status === "COMPLETED"
+  );
+}
+
+function prescriptionLabel(prescription: Prescription) {
+  const remaining = remainingSessions(prescription);
+  return `${prescription.title} - ${remaining} restante${
+    remaining > 1 ? "s" : ""
+  }${isPrescriptionComplete(prescription) ? " - complete" : ""}`;
+}
+
+function formFromSession(session: TherapySession): SessionForm {
   return {
-    patientId: prescription.patientId,
-    title: prescription.title,
-    prescribedSessions: String(prescription.prescribedSessions),
-    completedSessions: String(prescription.completedSessions),
-    startDate: dateInputValue(prescription.startDate),
-    endDate: dateInputValue(prescription.endDate),
-    status: prescription.status,
-    notes: prescription.notes || "",
+    patientId: session.patientId,
+    prescriptionId: session.prescriptionId,
+    sessionNumber: String(session.sessionNumber),
+    scheduledAt: dateTimeInputValue(session.scheduledAt),
+    completedAt: dateTimeInputValue(session.completedAt),
+    status: session.status,
+    notes: session.notes || "",
   };
 }
 
-export default function PrescriptionsDashboardPage() {
+export default function SessionsDashboardPage() {
   const router = useRouter();
   const [entities, setEntities] = useState<EntityListItem[]>([]);
   const [activeEntityId, setActiveEntityId] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
-  const [form, setForm] = useState<PrescriptionForm>(initialPrescriptionForm);
-  const [editingPrescriptionId, setEditingPrescriptionId] = useState<string | null>(
-    null
-  );
+  const [sessions, setSessions] = useState<TherapySession[]>([]);
+  const [form, setForm] = useState<SessionForm>(initialSessionForm);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [loadingEntities, setLoadingEntities] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deletingPrescriptionId, setDeletingPrescriptionId] = useState<
-    string | null
-  >(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const activeEntity = useMemo(
     () => entities.find((entity) => entity.id === activeEntityId) || null,
     [activeEntityId, entities]
+  );
+
+  const filteredPrescriptions = useMemo(
+    () =>
+      prescriptions.filter(
+        (prescription) => prescription.patientId === form.patientId
+      ),
+    [form.patientId, prescriptions]
+  );
+
+  const selectedPrescription = useMemo(
+    () =>
+      prescriptions.find(
+        (prescription) => prescription.id === form.prescriptionId
+      ) || null,
+    [form.prescriptionId, prescriptions]
   );
 
   const request = async <T,>(url: string, options: RequestInit = {}) => {
@@ -183,6 +229,22 @@ export default function PrescriptionsDashboardPage() {
     return payload.data as T;
   };
 
+  const resolveInitialForm = (
+    patientData: Patient[],
+    prescriptionData: Prescription[]
+  ) => {
+    const patientId = patientData[0]?.id || "";
+    const prescriptionId =
+      prescriptionData.find((prescription) => prescription.patientId === patientId)
+        ?.id || "";
+
+    return {
+      ...initialSessionForm(),
+      patientId,
+      prescriptionId,
+    };
+  };
+
   const loadEntities = async () => {
     setLoadingEntities(true);
     setError(null);
@@ -212,6 +274,7 @@ export default function PrescriptionsDashboardPage() {
     if (!entityId) {
       setPatients([]);
       setPrescriptions([]);
+      setSessions([]);
       return;
     }
 
@@ -219,26 +282,30 @@ export default function PrescriptionsDashboardPage() {
     setError(null);
 
     try {
-      const [patientData, prescriptionData] = await Promise.all([
+      const [patientData, prescriptionData, sessionData] = await Promise.all([
         request<Patient[]>(
           `/api/hugo/patients?entityId=${encodeURIComponent(entityId)}`
         ),
         request<Prescription[]>(
           `/api/hugo/prescriptions?entityId=${encodeURIComponent(entityId)}`
         ),
+        request<TherapySession[]>(
+          `/api/hugo/sessions?entityId=${encodeURIComponent(entityId)}`
+        ),
       ]);
 
       setPatients(patientData);
       setPrescriptions(prescriptionData);
-      setForm((current) => ({
-        ...current,
-        patientId: current.patientId || patientData[0]?.id || "",
-      }));
+      setSessions(sessionData);
+      setForm((current) => {
+        if (current.patientId && current.prescriptionId) return current;
+        return resolveInitialForm(patientData, prescriptionData);
+      });
     } catch (loadError) {
       setError(
         loadError instanceof Error
           ? loadError.message
-          : "Impossible de charger les prescriptions"
+          : "Impossible de charger les seances"
       );
     } finally {
       setLoadingData(false);
@@ -255,32 +322,70 @@ export default function PrescriptionsDashboardPage() {
     loadWorkspaceData(activeEntityId);
   }, [activeEntityId]);
 
-  const resetForm = (nextPatientId = patients[0]?.id || "") => {
+  useEffect(() => {
+    if (!form.patientId) return;
+    if (
+      form.prescriptionId &&
+      filteredPrescriptions.some(
+        (prescription) => prescription.id === form.prescriptionId
+      )
+    ) {
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      prescriptionId: filteredPrescriptions[0]?.id || "",
+    }));
+  }, [filteredPrescriptions, form.patientId, form.prescriptionId]);
+
+  const resetForm = (
+    nextPatientId = patients[0]?.id || "",
+    nextPrescriptionId?: string
+  ) => {
+    const firstPrescription =
+      nextPrescriptionId ||
+      prescriptions.find((prescription) => prescription.patientId === nextPatientId)
+        ?.id ||
+      "";
+
     setForm({
-      ...initialPrescriptionForm(),
+      ...initialSessionForm(),
       patientId: nextPatientId,
+      prescriptionId: firstPrescription,
     });
-    setEditingPrescriptionId(null);
+    setEditingSessionId(null);
   };
 
   const handleEntityChange = (entityId: string) => {
     setActiveEntityId(entityId);
     resetForm("");
     router.replace(
-      `/dashboard/prescriptions${entityId ? `?entityId=${entityId}` : ""}`,
+      `/dashboard/sessions${entityId ? `?entityId=${entityId}` : ""}`,
       undefined,
       { shallow: true }
     );
   };
 
+  const handlePatientChange = (patientId: string) => {
+    const firstPrescription =
+      prescriptions.find((prescription) => prescription.patientId === patientId)
+        ?.id || "";
+
+    setForm((current) => ({
+      ...current,
+      patientId,
+      prescriptionId: firstPrescription,
+    }));
+  };
+
   const buildPayload = () => ({
     entityId: activeEntityId,
     patientId: form.patientId,
-    title: form.title,
-    prescribedSessions: Number(form.prescribedSessions),
-    completedSessions: Number(form.completedSessions || 0),
-    startDate: form.startDate || null,
-    endDate: form.endDate || null,
+    prescriptionId: form.prescriptionId,
+    sessionNumber: Number(form.sessionNumber),
+    scheduledAt: form.scheduledAt || null,
+    completedAt: form.completedAt || null,
     status: form.status,
     notes: form.notes,
   });
@@ -293,8 +398,8 @@ export default function PrescriptionsDashboardPage() {
       return;
     }
 
-    if (!form.patientId) {
-      setError("Selectionnez un patient avant de creer une prescription.");
+    if (!form.patientId || !form.prescriptionId) {
+      setError("Selectionnez un patient et une prescription.");
       return;
     }
 
@@ -305,77 +410,76 @@ export default function PrescriptionsDashboardPage() {
     const payload = buildPayload();
 
     try {
-      if (editingPrescriptionId) {
-        const updated = await request<Prescription>(
-          `/api/hugo/prescriptions/${editingPrescriptionId}`,
+      if (editingSessionId) {
+        const updated = await request<TherapySession>(
+          `/api/hugo/sessions/${editingSessionId}`,
           {
             method: "PATCH",
             body: JSON.stringify(payload),
           }
         );
-        setPrescriptions((current) =>
-          current.map((prescription) =>
-            prescription.id === updated.id ? updated : prescription
-          )
+        setSessions((current) =>
+          current.map((session) => (session.id === updated.id ? updated : session))
         );
-        setSuccess("Prescription mise a jour.");
+        setSuccess("Seance mise a jour.");
       } else {
-        const created = await request<Prescription>("/api/hugo/prescriptions", {
+        const created = await request<TherapySession>("/api/hugo/sessions", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        setPrescriptions((current) => [created, ...current]);
-        setSuccess("Prescription creee.");
+        setSessions((current) => [created, ...current]);
+        setSuccess("Seance creee.");
       }
 
-      resetForm(form.patientId);
+      await loadWorkspaceData(activeEntityId);
+      resetForm(form.patientId, form.prescriptionId);
     } catch (saveError) {
       setError(
         saveError instanceof Error
           ? saveError.message
-          : "Impossible d'enregistrer la prescription"
+          : "Impossible d'enregistrer la seance"
       );
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = (prescription: Prescription) => {
-    setEditingPrescriptionId(prescription.id);
-    setForm(formFromPrescription(prescription));
+  const handleEdit = (session: TherapySession) => {
+    setEditingSessionId(session.id);
+    setForm(formFromSession(session));
     setError(null);
     setSuccess(null);
   };
 
-  const handleDelete = async (prescription: Prescription) => {
+  const handleDelete = async (session: TherapySession) => {
     if (!activeEntityId) return;
 
-    setDeletingPrescriptionId(prescription.id);
+    setDeletingSessionId(session.id);
     setError(null);
     setSuccess(null);
 
     try {
       await request<{ id: string }>(
-        `/api/hugo/prescriptions/${prescription.id}?entityId=${encodeURIComponent(
+        `/api/hugo/sessions/${session.id}?entityId=${encodeURIComponent(
           activeEntityId
         )}`,
         { method: "DELETE" }
       );
-      setPrescriptions((current) =>
-        current.filter((currentPrescription) => currentPrescription.id !== prescription.id)
+      setSessions((current) =>
+        current.filter((currentSession) => currentSession.id !== session.id)
       );
-      if (editingPrescriptionId === prescription.id) {
+      if (editingSessionId === session.id) {
         resetForm();
       }
-      setSuccess("Prescription supprimee.");
+      setSuccess("Seance supprimee.");
     } catch (deleteError) {
       setError(
         deleteError instanceof Error
           ? deleteError.message
-          : "Impossible de supprimer la prescription"
+          : "Impossible de supprimer la seance"
       );
     } finally {
-      setDeletingPrescriptionId(null);
+      setDeletingSessionId(null);
     }
   };
 
@@ -385,32 +489,16 @@ export default function PrescriptionsDashboardPage() {
         <nav className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-5">
           <LogoMark />
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard")}
-              className={BUTTON_LIGHT}
-            >
+            <button type="button" onClick={() => router.push("/dashboard")} className={BUTTON_LIGHT}>
               Cockpit
             </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/patients")}
-              className={BUTTON_LIGHT}
-            >
+            <button type="button" onClick={() => router.push("/dashboard/patients")} className={BUTTON_LIGHT}>
               Patients
             </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/sessions")}
-              className={BUTTON_LIGHT}
-            >
-              Séances
+            <button type="button" onClick={() => router.push("/dashboard/prescriptions")} className={BUTTON_LIGHT}>
+              Prescriptions
             </button>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/users")}
-              className={BUTTON_LIGHT}
-            >
+            <button type="button" onClick={() => router.push("/dashboard/users")} className={BUTTON_LIGHT}>
               Acces
             </button>
           </div>
@@ -422,14 +510,14 @@ export default function PrescriptionsDashboardPage() {
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Prescriptions
+                Séances
               </p>
               <h1 className="mt-3 text-3xl font-bold tracking-[-0.04em]">
-                Suivi des prescriptions
+                Suivi des séances
               </h1>
               <p className="mt-2 max-w-2xl text-sm font-medium leading-6 text-black/50">
-                Un espace simple pour suivre les seances prevues, realisees et
-                restantes par patient.
+                Un espace simple pour planifier, completer et garder le fil des
+                seances rattachees aux prescriptions.
               </p>
             </div>
 
@@ -472,12 +560,10 @@ export default function PrescriptionsDashboardPage() {
         <section className="mt-4 grid gap-4 xl:grid-cols-[0.95fr_1.25fr]">
           <div className={cn(CARD, "p-5")}>
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-              {editingPrescriptionId ? "Edition" : "Nouvelle prescription"}
+              {editingSessionId ? "Edition" : "Nouvelle seance"}
             </p>
             <h2 className="mt-3 text-xl font-semibold tracking-[-0.03em]">
-              {editingPrescriptionId
-                ? "Modifier la prescription"
-                : "Ajouter une prescription"}
+              {editingSessionId ? "Modifier la seance" : "Ajouter une seance"}
             </h2>
 
             <form onSubmit={handleSubmit} className="mt-5 grid gap-4">
@@ -487,12 +573,7 @@ export default function PrescriptionsDashboardPage() {
                 </span>
                 <select
                   value={form.patientId}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      patientId: event.target.value,
-                    }))
-                  }
+                  onChange={(event) => handlePatientChange(event.target.value)}
                   className={INPUT}
                   required
                 >
@@ -507,32 +588,58 @@ export default function PrescriptionsDashboardPage() {
 
               <label>
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                  Titre
+                  Prescription
                 </span>
-                <input
-                  value={form.title}
+                <select
+                  value={form.prescriptionId}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
-                      title: event.target.value,
+                      prescriptionId: event.target.value,
                     }))
                   }
                   className={INPUT}
                   required
-                />
+                >
+                  {!filteredPrescriptions.length && (
+                    <option value="">Aucune prescription</option>
+                  )}
+                  {filteredPrescriptions.map((prescription) => (
+                    <option key={prescription.id} value={prescription.id}>
+                      {prescriptionLabel(prescription)}
+                    </option>
+                  ))}
+                </select>
               </label>
+
+              {selectedPrescription && (
+                <div
+                  className={cn(
+                    "rounded-2xl border px-4 py-3 text-sm font-semibold",
+                    isPrescriptionComplete(selectedPrescription)
+                      ? "border-amber-200 bg-amber-50 text-amber-800"
+                      : "border-blue-100 bg-blue-50 text-blue-700"
+                  )}
+                >
+                  {isPrescriptionComplete(selectedPrescription)
+                    ? "Prescription complete."
+                    : `${remainingSessions(
+                        selectedPrescription
+                      )} seance(s) restante(s) sur cette prescription.`}
+                </div>
+              )}
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Seances prevues
+                    Numero
                   </span>
                   <input
-                    value={form.prescribedSessions}
+                    value={form.sessionNumber}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        prescribedSessions: event.target.value,
+                        sessionNumber: event.target.value,
                       }))
                     }
                     className={INPUT}
@@ -544,80 +651,62 @@ export default function PrescriptionsDashboardPage() {
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Seances realisees
+                    Statut
                   </span>
-                  <input
-                    value={form.completedSessions}
+                  <select
+                    value={form.status}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        completedSessions: event.target.value,
+                        status: event.target.value as TherapySessionStatus,
                       }))
                     }
                     className={INPUT}
-                    min={0}
-                    type="number"
-                  />
+                  >
+                    {STATUS_OPTIONS.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Debut
+                    Planifiee
                   </span>
                   <input
-                    value={form.startDate}
+                    value={form.scheduledAt}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        startDate: event.target.value,
+                        scheduledAt: event.target.value,
                       }))
                     }
                     className={INPUT}
-                    type="date"
+                    type="datetime-local"
                   />
                 </label>
 
                 <label>
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                    Fin
+                    Realisee
                   </span>
                   <input
-                    value={form.endDate}
+                    value={form.completedAt}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        endDate: event.target.value,
+                        completedAt: event.target.value,
                       }))
                     }
                     className={INPUT}
-                    type="date"
+                    type="datetime-local"
                   />
                 </label>
               </div>
-
-              <label>
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
-                  Statut
-                </span>
-                <select
-                  value={form.status}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      status: event.target.value as PrescriptionStatus,
-                    }))
-                  }
-                  className={INPUT}
-                >
-                  {STATUS_OPTIONS.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
 
               <label>
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-black/50">
@@ -638,16 +727,21 @@ export default function PrescriptionsDashboardPage() {
               <div className="flex flex-wrap gap-3">
                 <button
                   type="submit"
-                  disabled={saving || !activeEntityId || !patients.length}
+                  disabled={
+                    saving ||
+                    !activeEntityId ||
+                    !patients.length ||
+                    !filteredPrescriptions.length
+                  }
                   className={BUTTON_DARK}
                 >
                   {saving
                     ? "Enregistrement..."
-                    : editingPrescriptionId
+                    : editingSessionId
                     ? "Mettre a jour"
-                    : "Creer la prescription"}
+                    : "Creer la seance"}
                 </button>
-                {editingPrescriptionId && (
+                {editingSessionId && (
                   <button
                     type="button"
                     onClick={() => resetForm()}
@@ -664,11 +758,11 @@ export default function PrescriptionsDashboardPage() {
             <div className="flex flex-col gap-2 border-b border-black/5 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <h2 className="text-xl font-semibold tracking-[-0.03em]">
-                  Prescriptions
+                  Séances
                 </h2>
                 <p className="mt-1 text-sm font-medium text-black/45">
-                  {activeEntity?.name || "Cabinet"} - {prescriptions.length} prescription
-                  {prescriptions.length > 1 ? "s" : ""}
+                  {activeEntity?.name || "Cabinet"} - {sessions.length} seance
+                  {sessions.length > 1 ? "s" : ""}
                 </p>
               </div>
               <button
@@ -689,77 +783,84 @@ export default function PrescriptionsDashboardPage() {
                   ))}
                 </div>
               </div>
-            ) : !prescriptions.length ? (
+            ) : !sessions.length ? (
               <div className="px-5 py-14 text-center">
-                <p className="text-base font-semibold">Aucune prescription.</p>
+                <p className="text-base font-semibold">Aucune seance.</p>
                 <p className="mt-2 text-sm font-medium text-black/50">
-                  Ajoutez une prescription pour suivre les seances restantes.
+                  Ajoutez une premiere seance pour suivre l'avancement des
+                  prescriptions.
                 </p>
               </div>
             ) : (
               <div className="divide-y divide-black/5">
-                {prescriptions.map((prescription) => {
-                  const remainingSessions = Math.max(
-                    0,
-                    prescription.prescribedSessions - prescription.completedSessions
-                  );
-
-                  return (
-                    <div
-                      key={prescription.id}
-                      className="grid gap-4 px-5 py-5 transition hover:bg-black/[0.02] lg:grid-cols-[1fr_auto]"
-                    >
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-semibold">{prescription.title}</p>
-                          <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/55">
-                            {prescription.status}
-                          </span>
-                        </div>
-
-                        <p className="mt-2 text-sm font-semibold text-black/60">
-                          {patientDisplayName(prescription.patient)}
+                {sessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className="grid gap-4 px-5 py-5 transition hover:bg-black/[0.02] lg:grid-cols-[1fr_auto]"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold">
+                          Seance {session.sessionNumber}
                         </p>
+                        <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/55">
+                          {session.status}
+                        </span>
+                      </div>
 
-                        <div className="mt-3 grid gap-2 text-xs font-medium text-black/50 sm:grid-cols-2">
-                          <span>
-                            {prescription.completedSessions}/
-                            {prescription.prescribedSessions} seances realisees
-                          </span>
-                          <span>{remainingSessions} restantes</span>
-                          <span>Debut {formatDate(prescription.startDate)}</span>
-                          <span>Fin {formatDate(prescription.endDate)}</span>
-                        </div>
+                      <p className="mt-2 text-sm font-semibold text-black/60">
+                        {patientDisplayName(session.patient)} -{" "}
+                        {session.prescription?.title || "Prescription inconnue"}
+                      </p>
 
-                        {prescription.notes && (
-                          <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-black/50">
-                            {prescription.notes}
-                          </p>
+                      <div className="mt-3 grid gap-2 text-xs font-medium text-black/50 sm:grid-cols-2">
+                        <span>Planifiee {formatDateTime(session.scheduledAt)}</span>
+                        <span>Realisee {formatDateTime(session.completedAt)}</span>
+                        {session.prescription && (
+                          <>
+                            <span>
+                              {remainingSessions(session.prescription)} restante
+                              {remainingSessions(session.prescription) > 1
+                                ? "s"
+                                : ""}
+                            </span>
+                            <span>
+                              {isPrescriptionComplete(session.prescription)
+                                ? "Prescription complete"
+                                : "Prescription active"}
+                            </span>
+                          </>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(prescription)}
-                          className={BUTTON_LIGHT}
-                        >
-                          Modifier
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(prescription)}
-                          disabled={deletingPrescriptionId === prescription.id}
-                          className="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {deletingPrescriptionId === prescription.id
-                            ? "Suppression..."
-                            : "Supprimer"}
-                        </button>
-                      </div>
+                      {session.notes && (
+                        <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-black/50">
+                          {session.notes}
+                        </p>
+                      )}
                     </div>
-                  );
-                })}
+
+                    <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleEdit(session)}
+                        className={BUTTON_LIGHT}
+                      >
+                        Modifier
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(session)}
+                        disabled={deletingSessionId === session.id}
+                        className="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {deletingSessionId === session.id
+                          ? "Suppression..."
+                          : "Supprimer"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

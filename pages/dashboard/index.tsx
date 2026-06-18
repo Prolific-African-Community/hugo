@@ -203,6 +203,13 @@ export default function WorkspaceDashboard() {
             </button>
             <button
               type="button"
+              onClick={() => router.push("/dashboard/sessions")}
+              className="rounded-full border border-black/10 px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white"
+            >
+              Séances
+            </button>
+            <button
+              type="button"
               onClick={handleLogout}
               className="rounded-full border border-black px-4 py-2 text-xs font-bold text-black transition hover:bg-black hover:text-white"
             >

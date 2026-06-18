@@ -352,6 +352,13 @@ export default function PatientsDashboardPage() {
             >
               Prescriptions
             </button>
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/sessions")}
+              className={BUTTON_LIGHT}
+            >
+              Séances
+            </button>
           </div>
         </nav>
       </header>
