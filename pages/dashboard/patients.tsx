@@ -41,15 +41,15 @@ interface ApiResponse<T> {
 type ClassValue = string | false | null | undefined;
 
 const cn = (...classes: ClassValue[]) => classes.filter(Boolean).join(" ");
-const PAGE_BG = "bg-[#ececf1]";
+const PAGE_BG = "bg-[#f7f8f6]";
 const CARD =
-  "rounded-[1.25rem] border border-black/10 bg-white shadow-[0_14px_40px_rgba(15,23,42,0.055)]";
+  "rounded-[1.35rem] border border-white/70 bg-white/68 shadow-[0_18px_55px_rgba(54,69,79,0.055)] backdrop-blur-xl";
 const INPUT =
-  "w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-medium text-black outline-none transition placeholder:text-black/30 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+  "w-full rounded-2xl border border-white/80 bg-white/65 px-4 py-3 text-sm font-medium text-black outline-none transition placeholder:text-black/30 focus:border-cyan-200 focus:bg-white/90 focus:ring-4 focus:ring-cyan-100/45";
 const BUTTON_DARK =
-  "inline-flex items-center justify-center rounded-full bg-black px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-slate-800 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-full bg-[#202522] px-4 py-2.5 text-xs font-semibold text-white shadow-[0_10px_25px_rgba(30,37,34,0.12)] transition-all duration-200 hover:-translate-y-px hover:bg-[#303832] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50";
 const BUTTON_LIGHT =
-  "inline-flex items-center justify-center rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-full border border-white/70 bg-white/55 px-4 py-2.5 text-xs font-semibold text-black/72 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black disabled:cursor-not-allowed disabled:opacity-50";
 
 const STATUS_OPTIONS: PatientStatus[] = ["ACTIVE", "INACTIVE", "ARCHIVED"];
 
@@ -73,6 +73,18 @@ function LogoMark() {
       <span className="text-sm font-bold tracking-tight text-black">Hugo</span>
     </div>
   );
+}
+
+function NavIcon({ name }: { name: "grid" | "user" | "document" | "calendar" | "receipt" }) {
+  const common = "h-3.5 w-3.5 text-cyan-700/60";
+  const paths = {
+    grid: <><path d="M4 4h6v6H4z" /><path d="M14 4h6v6h-6z" /><path d="M4 14h6v6H4z" /><path d="M14 14h6v6h-6z" /></>,
+    user: <><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" /><path d="M4.5 20a7.5 7.5 0 0 1 15 0" /></>,
+    document: <><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h5" /><path d="M9.5 13h5" /><path d="M9.5 17h4" /></>,
+    calendar: <><path d="M5 6h14v14H5z" /><path d="M8 3v5" /><path d="M16 3v5" /><path d="M5 10h14" /></>,
+    receipt: <><path d="M7 3h10v18l-2-1.2-2 1.2-2-1.2-2 1.2-2-1.2z" /><path d="M9.5 8h5" /><path d="M9.5 12h5" /></>,
+  };
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" className={common} aria-hidden="true">{paths[name]}</svg>;
 }
 
 function patientDisplayName(patient: Patient) {
@@ -327,7 +339,7 @@ export default function PatientsDashboardPage() {
 
   return (
     <div className={cn(PAGE_BG, "min-h-screen text-black")}>
-      <header className="border-b border-black/5 bg-[#ececf1]/90 backdrop-blur-md">
+      <header className="border-b border-white/70 bg-white/45 backdrop-blur-2xl">
         <nav className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-5">
           <LogoMark />
           <div className="flex flex-wrap gap-3">
@@ -336,6 +348,7 @@ export default function PatientsDashboardPage() {
               onClick={() => router.push("/dashboard")}
               className={BUTTON_LIGHT}
             >
+              <NavIcon name="grid" />
               Cockpit
             </button>
             <button
@@ -343,6 +356,7 @@ export default function PatientsDashboardPage() {
               onClick={() => router.push("/dashboard/prescriptions")}
               className={BUTTON_LIGHT}
             >
+              <NavIcon name="document" />
               Prescriptions
             </button>
             <button
@@ -350,6 +364,7 @@ export default function PatientsDashboardPage() {
               onClick={() => router.push("/dashboard/sessions")}
               className={BUTTON_LIGHT}
             >
+              <NavIcon name="calendar" />
               Séances
             </button>
             <button
@@ -357,6 +372,7 @@ export default function PatientsDashboardPage() {
               onClick={() => router.push("/dashboard/invoices")}
               className={BUTTON_LIGHT}
             >
+              <NavIcon name="receipt" />
               Factures
             </button>
           </div>

@@ -98,13 +98,103 @@ interface ApiResponse<T> {
 type ClassValue = string | false | null | undefined;
 
 const cn = (...classes: ClassValue[]) => classes.filter(Boolean).join(" ");
-const PAGE_BG = "bg-[#ececf1]";
+const PAGE_BG = "bg-[#f7f8f6]";
 const CARD =
-  "rounded-[1.25rem] border border-black/10 bg-white shadow-[0_14px_40px_rgba(15,23,42,0.055)]";
+  "rounded-[1.35rem] border border-white/70 bg-white/68 shadow-[0_18px_55px_rgba(54,69,79,0.055)] backdrop-blur-xl";
 const BUTTON_DARK =
-  "inline-flex items-center justify-center rounded-full bg-black px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-slate-800 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-full bg-[#202522] px-4 py-2.5 text-xs font-semibold text-white shadow-[0_10px_25px_rgba(30,37,34,0.12)] transition-all duration-200 hover:-translate-y-px hover:bg-[#303832] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50";
 const BUTTON_LIGHT =
-  "inline-flex items-center justify-center rounded-full border border-black/10 bg-white px-4 py-2.5 text-xs font-semibold text-black transition hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-full border border-white/70 bg-white/55 px-4 py-2.5 text-xs font-semibold text-black/72 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black disabled:cursor-not-allowed disabled:opacity-50";
+
+type IconName =
+  | "grid"
+  | "user"
+  | "document"
+  | "calendar"
+  | "receipt"
+  | "sun"
+  | "clock"
+  | "alert"
+  | "spark";
+
+function Icon({ name, className = "h-4 w-4" }: { name: IconName; className?: string }) {
+  const paths: Record<IconName, JSX.Element> = {
+    grid: (
+      <>
+        <path d="M4 4h6v6H4z" />
+        <path d="M14 4h6v6h-6z" />
+        <path d="M4 14h6v6H4z" />
+        <path d="M14 14h6v6h-6z" />
+      </>
+    ),
+    user: (
+      <>
+        <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />
+        <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+      </>
+    ),
+    document: (
+      <>
+        <path d="M7 3h7l4 4v14H7z" />
+        <path d="M14 3v5h5" />
+        <path d="M9.5 13h5" />
+        <path d="M9.5 17h4" />
+      </>
+    ),
+    calendar: (
+      <>
+        <path d="M5 6h14v14H5z" />
+        <path d="M8 3v5" />
+        <path d="M16 3v5" />
+        <path d="M5 10h14" />
+      </>
+    ),
+    receipt: (
+      <>
+        <path d="M7 3h10v18l-2-1.2-2 1.2-2-1.2-2 1.2-2-1.2z" />
+        <path d="M9.5 8h5" />
+        <path d="M9.5 12h5" />
+        <path d="M9.5 16h3" />
+      </>
+    ),
+    sun: (
+      <>
+        <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" />
+        <path d="M12 2v3" />
+        <path d="M12 19v3" />
+        <path d="M4.9 4.9 7 7" />
+        <path d="m17 17 2.1 2.1" />
+        <path d="M2 12h3" />
+        <path d="M19 12h3" />
+      </>
+    ),
+    clock: (
+      <>
+        <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" />
+        <path d="M12 7v5l3 2" />
+      </>
+    ),
+    alert: (
+      <>
+        <path d="M12 3 22 20H2z" />
+        <path d="M12 9v4" />
+        <path d="M12 17h.01" />
+      </>
+    ),
+    spark: (
+      <>
+        <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />
+        <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />
+      </>
+    ),
+  };
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
+}
 
 function LogoMark() {
   return (
@@ -120,13 +210,16 @@ function LogoMark() {
 
 function NavButton({
   children,
+  icon,
   onClick,
 }: {
   children: string;
+  icon: IconName;
   onClick: () => void;
 }) {
   return (
     <button type="button" onClick={onClick} className={BUTTON_LIGHT}>
+      <Icon name={icon} className="h-3.5 w-3.5 text-cyan-700/60" />
       {children}
     </button>
   );
@@ -137,11 +230,15 @@ function MetricCard({
   value,
   detail,
   accent,
+  icon,
+  tone = "bg-cyan-50 text-cyan-700",
 }: {
   label: string;
   value: string | number;
   detail: string;
   accent?: boolean;
+  icon: IconName;
+  tone?: string;
 }) {
   return (
     <div className={cn(CARD, "min-h-[150px] p-5")}>
@@ -151,10 +248,13 @@ function MetricCard({
         </p>
         <span
           className={cn(
-            "h-2.5 w-2.5 shrink-0 rounded-full",
-            accent ? "bg-blue-500" : "bg-black/10"
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+            tone,
+            accent && "ring-4 ring-cyan-100/70"
           )}
-        />
+        >
+          <Icon name={icon} className="h-4 w-4" />
+        </span>
       </div>
       <p className="mt-7 text-4xl font-bold tracking-[-0.05em]">{value}</p>
       <p className="mt-3 text-sm font-medium leading-6 text-black/50">{detail}</p>
@@ -361,23 +461,24 @@ export default function WorkspaceDashboard() {
 
   return (
     <div className={cn(PAGE_BG, "min-h-screen text-black")}>
-      <header className="border-b border-black/5 bg-[#ececf1]/90 backdrop-blur-md">
+      <header className="border-b border-white/70 bg-white/45 backdrop-blur-2xl">
         <nav className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-5">
           <LogoMark />
           <div className="flex flex-wrap gap-3">
-            <NavButton onClick={() => router.push("/dashboard")}>Cockpit</NavButton>
-            <NavButton onClick={() => router.push(`/dashboard/patients${entityQuery}`)}>
+            <NavButton icon="grid" onClick={() => router.push("/dashboard")}>Cockpit</NavButton>
+            <NavButton icon="user" onClick={() => router.push(`/dashboard/patients${entityQuery}`)}>
               Patients
             </NavButton>
             <NavButton
+              icon="document"
               onClick={() => router.push(`/dashboard/prescriptions${entityQuery}`)}
             >
               Prescriptions
             </NavButton>
-            <NavButton onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}>
+            <NavButton icon="calendar" onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}>
               Séances
             </NavButton>
-            <NavButton onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}>
+            <NavButton icon="receipt" onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}>
               Factures
             </NavButton>
           </div>
@@ -439,21 +540,29 @@ export default function WorkspaceDashboard() {
             value={loading ? "..." : todaySessions.length}
             detail="seance(s) planifiee(s) aujourd'hui"
             accent
+            icon="sun"
+            tone="bg-cyan-50 text-cyan-700"
           />
           <MetricCard
             label="Patients actifs"
             value={loading ? "..." : metrics?.activePatientsCount ?? 0}
             detail="patients suivis dans le cabinet"
+            icon="user"
+            tone="bg-[#eef6ec] text-[#5f7f68]"
           />
           <MetricCard
             label="Prescriptions actives"
             value={loading ? "..." : metrics?.activePrescriptionsCount ?? 0}
             detail="prescriptions encore ouvertes"
+            icon="document"
+            tone="bg-[#fbf3df] text-[#927341]"
           />
           <MetricCard
             label="Séances à venir"
             value={loading ? "..." : metrics?.upcomingSessionsCount ?? 0}
             detail="prochaines seances a garder en vue"
+            icon="clock"
+            tone="bg-[#edf7fb] text-[#4f7f92]"
           />
         </section>
 
@@ -484,8 +593,9 @@ export default function WorkspaceDashboard() {
             </div>
           ) : (
             <div className="grid gap-4 p-5 lg:grid-cols-3">
-              <div className="rounded-2xl border border-black/5 bg-[#fbfbfc] p-4">
-                <h3 className="text-sm font-bold tracking-[-0.02em]">
+              <div className="rounded-2xl border border-[#eadfca]/70 bg-[#fff8ea]/70 p-4 backdrop-blur-xl">
+                <h3 className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em] text-[#7b6745]">
+                  <Icon name="alert" className="h-4 w-4" />
                   À surveiller
                 </h3>
                 <BillingReadinessList
@@ -495,8 +605,9 @@ export default function WorkspaceDashboard() {
                 />
               </div>
 
-              <div className="rounded-2xl border border-black/5 bg-[#fbfbfc] p-4">
-                <h3 className="text-sm font-bold tracking-[-0.02em]">
+              <div className="rounded-2xl border border-cyan-100/70 bg-cyan-50/55 p-4 backdrop-blur-xl">
+                <h3 className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em] text-cyan-800/75">
+                  <Icon name="spark" className="h-4 w-4" />
                   Brouillon suggéré
                 </h3>
                 <BillingReadinessList
@@ -508,8 +619,9 @@ export default function WorkspaceDashboard() {
                 />
               </div>
 
-              <div className="rounded-2xl border border-black/5 bg-[#fbfbfc] p-4">
-                <h3 className="text-sm font-bold tracking-[-0.02em]">
+              <div className="rounded-2xl border border-[#dbead7]/80 bg-[#f0f8ee]/70 p-4 backdrop-blur-xl">
+                <h3 className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em] text-[#5f7f68]">
+                  <Icon name="receipt" className="h-4 w-4" />
                   Prête à valider
                 </h3>
                 <BillingReadinessList
@@ -531,29 +643,33 @@ export default function WorkspaceDashboard() {
               <button
                 type="button"
                 onClick={() => router.push(`/dashboard/patients${entityQuery}`)}
-                className={BUTTON_DARK}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#dcebd7] bg-[#eef6ec] px-4 py-2.5 text-xs font-semibold text-[#4f755b] shadow-[0_10px_24px_rgba(79,117,91,0.07)] transition hover:-translate-y-px hover:bg-[#e5f1e2]"
               >
+                <Icon name="user" className="h-3.5 w-3.5" />
                 Ajouter patient
               </button>
               <button
                 type="button"
                 onClick={() => router.push(`/dashboard/prescriptions${entityQuery}`)}
-                className={BUTTON_LIGHT}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#eadfca] bg-[#fff7e6] px-4 py-2.5 text-xs font-semibold text-[#7b6745] shadow-[0_10px_24px_rgba(123,103,69,0.06)] transition hover:-translate-y-px hover:bg-[#fff2d2]"
               >
+                <Icon name="document" className="h-3.5 w-3.5" />
                 Ajouter prescription
               </button>
               <button
                 type="button"
                 onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
-                className={BUTTON_LIGHT}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-cyan-100 bg-cyan-50 px-4 py-2.5 text-xs font-semibold text-cyan-800/75 shadow-[0_10px_24px_rgba(14,116,144,0.055)] transition hover:-translate-y-px hover:bg-cyan-100/55"
               >
+                <Icon name="calendar" className="h-3.5 w-3.5" />
                 Ajouter séance
               </button>
               <button
                 type="button"
                 onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
-                className={BUTTON_LIGHT}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#f3ddd7] bg-[#fff1ed] px-4 py-2.5 text-xs font-semibold text-[#9a6657] shadow-[0_10px_24px_rgba(154,102,87,0.055)] transition hover:-translate-y-px hover:bg-[#ffe9e2]"
               >
+                <Icon name="receipt" className="h-3.5 w-3.5" />
                 Ajouter facture
               </button>
             </div>
