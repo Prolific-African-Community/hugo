@@ -1,9 +1,9 @@
 import { CalendarConnectionStatus } from "@prisma/client";
 import type { NextApiResponse } from "next";
-import { jsonError, jsonSuccess } from "../../../../lib/accounting-api";
-import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
-import { requireHugoCabinet } from "../../../../lib/hugo-auth";
-import { prisma } from "../../../../lib/prisma";
+import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
+import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
+import { requireHugoCabinet } from "../../../../../lib/hugo-auth";
+import { prisma } from "../../../../../lib/prisma";
 
 interface CalendarConnectionUpdateBody {
   name?: unknown;

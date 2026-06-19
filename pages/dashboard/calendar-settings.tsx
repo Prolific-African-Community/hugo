@@ -28,6 +28,17 @@ interface CalendarConnectionForm {
   calendarUrl: string;
 }
 
+interface CalendarSyncResult {
+  importedCount: number;
+  updatedCount: number;
+  unmatchedCount: number;
+  skippedCount: number;
+  connection: Pick<
+    CalendarConnection,
+    "id" | "status" | "lastSyncedAt" | "lastError"
+  >;
+}
+
 type ClassValue = string | false | null | undefined;
 type IconName = "grid" | "calendar" | "upload" | "link";
 
@@ -146,6 +157,10 @@ export default function CalendarSettingsPage() {
   const [form, setForm] = useState<CalendarConnectionForm>(emptyForm());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncResults, setSyncResults] = useState<Record<string, CalendarSyncResult>>(
+    {}
+  );
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -264,6 +279,48 @@ export default function CalendarSettingsPage() {
       );
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const handleSync = async (connection: CalendarConnection) => {
+    setSyncingId(connection.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const syncResult = await request<CalendarSyncResult>(
+        `/api/hugo/calendar-connections/${connection.id}/sync`,
+        {
+          method: "POST",
+        }
+      );
+
+      setSyncResults((current) => ({
+        ...current,
+        [connection.id]: syncResult,
+      }));
+      setConnections((current) =>
+        current.map((item) =>
+          item.id === connection.id
+            ? {
+                ...item,
+                status: syncResult.connection.status,
+                lastSyncedAt: syncResult.connection.lastSyncedAt,
+                lastError: syncResult.connection.lastError,
+              }
+            : item
+        )
+      );
+      setSuccess("Synchronisation agenda terminée.");
+    } catch (syncError) {
+      setError(
+        syncError instanceof Error
+          ? syncError.message
+          : "Impossible de synchroniser l'agenda"
+      );
+      await loadConnections();
+    } finally {
+      setSyncingId(null);
     }
   };
 
@@ -447,7 +504,10 @@ export default function CalendarSettingsPage() {
               </p>
             ) : (
               <div className="divide-y divide-black/5">
-                {connections.map((connection) => (
+                {connections.map((connection) => {
+                  const syncResult = syncResults[connection.id];
+
+                  return (
                   <div key={connection.id} className="px-5 py-5">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                       <div>
@@ -481,6 +541,20 @@ export default function CalendarSettingsPage() {
                       <div className="flex flex-wrap gap-2 lg:justify-end">
                         <button
                           type="button"
+                          onClick={() => handleSync(connection)}
+                          disabled={
+                            syncingId === connection.id ||
+                            connection.status === "DISCONNECTED"
+                          }
+                          className={BUTTON_DARK}
+                        >
+                          <Icon name="upload" className="h-3.5 w-3.5" />
+                          {syncingId === connection.id
+                            ? "Synchronisation..."
+                            : "Synchroniser"}
+                        </button>
+                        <button
+                          type="button"
                           onClick={() =>
                             handleStatusChange(
                               connection,
@@ -508,8 +582,45 @@ export default function CalendarSettingsPage() {
                         </button>
                       </div>
                     </div>
+                    {syncResult && (
+                      <div className="mt-4 grid gap-3 rounded-3xl border border-white/70 bg-white/45 p-4 backdrop-blur-xl sm:grid-cols-4">
+                        <div className="rounded-2xl border border-cyan-100/80 bg-cyan-50/70 px-4 py-3 text-cyan-800/75">
+                          <p className="text-xl font-bold tracking-[-0.04em]">
+                            {syncResult.importedCount}
+                          </p>
+                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                            Importés
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-4 py-3 text-[#5f7f68]">
+                          <p className="text-xl font-bold tracking-[-0.04em]">
+                            {syncResult.updatedCount}
+                          </p>
+                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                            Mis à jour
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-[#eadfca]/80 bg-[#fff7e6]/80 px-4 py-3 text-[#7b6745]">
+                          <p className="text-xl font-bold tracking-[-0.04em]">
+                            {syncResult.unmatchedCount}
+                          </p>
+                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                            Non reconnus
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-[#f3ddd7]/80 bg-[#fff1ed]/80 px-4 py-3 text-[#9a6657]">
+                          <p className="text-xl font-bold tracking-[-0.04em]">
+                            {syncResult.skippedCount}
+                          </p>
+                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                            Ignorés
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
