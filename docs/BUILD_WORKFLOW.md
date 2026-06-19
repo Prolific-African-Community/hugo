@@ -16,12 +16,24 @@ Ne jamais melanger inutilement :
 ## Regles
 
 1. Definir un objectif unique avant chaque run.
-2. Lancer un seul prompt Codex.
-3. Relire le resultat.
-4. Lancer npm run build.
-5. Corriger seulement si necessaire.
-6. Valider humainement.
-7. Passer au run suivant uniquement apres validation.
+2. Verifier la coherence avec la Vision Produit dans docs/HUGO_CONTEXT.md.
+3. Verifier que le run ne recree pas une fonctionnalite dont la source de verite est externe.
+4. Lancer un seul prompt Codex.
+5. Relire le resultat.
+6. Lancer npm run build.
+7. Corriger seulement si necessaire.
+8. Valider humainement.
+9. Passer au run suivant uniquement apres validation.
+
+## Avant chaque run
+
+Verifier :
+- l'objectif est compatible avec Hugo comme assistant operationnel intelligent
+- Doctena reste la source de verite cible de l'agenda patient
+- Apple Calendar est la couche de synchronisation cible pour les rendez-vous
+- la CNS reste la source de verite de la facture officielle
+- Hugo ne se transforme pas en agenda concurrent, ERP, comptabilite ou logiciel de facturation legale
+- le run ajoute une couche d'assistance, de suivi, d'alerte, d'archivage ou de rapprochement utile au cabinet
 
 ## Format attendu apres chaque run
 

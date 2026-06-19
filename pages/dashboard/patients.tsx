@@ -637,9 +637,15 @@ export default function PatientsDashboardPage() {
                   >
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-semibold">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            router.push(`/dashboard/patients/${patient.id}`)
+                          }
+                          className="text-left font-semibold transition hover:text-cyan-700"
+                        >
                           {patientDisplayName(patient)}
-                        </p>
+                        </button>
                         <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/55">
                           {patient.status}
                         </span>
