@@ -80,6 +80,31 @@ const getNullableString = (value: unknown) => {
   return trimmed ? trimmed : null;
 };
 
+const recomputePrescriptionCompletedSessions = async (
+  prescriptionId: string,
+  cabinetId: string
+) => {
+  const completedSessions = await prisma.therapySession.count({
+    where: {
+      entityId: cabinetId,
+      prescriptionId,
+      status: TherapySessionStatus.COMPLETED,
+    },
+  });
+
+  await prisma.prescription.updateMany({
+    where: {
+      id: prescriptionId,
+      entityId: cabinetId,
+    },
+    data: {
+      completedSessions,
+    },
+  });
+
+  return completedSessions;
+};
+
 const listSessions = async (
   req: AuthenticatedNextApiRequest,
   res: NextApiResponse
@@ -247,7 +272,17 @@ const createSession = async (
     include: sessionInclude,
   });
 
-  return jsonSuccess(res, session, 201);
+  await recomputePrescriptionCompletedSessions(
+    prescriptionId,
+    cabinet.cabinetId
+  );
+
+  const syncedSession = await prisma.therapySession.findUnique({
+    where: { id: session.id },
+    include: sessionInclude,
+  });
+
+  return jsonSuccess(res, syncedSession || session, 201);
 };
 
 export default withAuth(

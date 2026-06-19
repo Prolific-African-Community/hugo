@@ -88,6 +88,31 @@ const getRequiredSessionId = (req: AuthenticatedNextApiRequest) => {
     : null;
 };
 
+const recomputePrescriptionCompletedSessions = async (
+  prescriptionId: string,
+  cabinetId: string
+) => {
+  const completedSessions = await prisma.therapySession.count({
+    where: {
+      entityId: cabinetId,
+      prescriptionId,
+      status: TherapySessionStatus.COMPLETED,
+    },
+  });
+
+  await prisma.prescription.updateMany({
+    where: {
+      id: prescriptionId,
+      entityId: cabinetId,
+    },
+    data: {
+      completedSessions,
+    },
+  });
+
+  return completedSessions;
+};
+
 const getSession = async (
   req: AuthenticatedNextApiRequest,
   res: NextApiResponse
@@ -254,7 +279,27 @@ const updateSession = async (
     include: sessionInclude,
   });
 
-  return jsonSuccess(res, session);
+  const prescriptionsToRecompute = new Set<string>();
+  if (existingSession.prescriptionId) {
+    prescriptionsToRecompute.add(existingSession.prescriptionId);
+  }
+  prescriptionsToRecompute.add(nextPrescriptionId);
+
+  await Promise.all(
+    Array.from(prescriptionsToRecompute).map((prescriptionToRecomputeId) =>
+      recomputePrescriptionCompletedSessions(
+        prescriptionToRecomputeId,
+        cabinet.cabinetId
+      )
+    )
+  );
+
+  const syncedSession = await prisma.therapySession.findUnique({
+    where: { id: session.id },
+    include: sessionInclude,
+  });
+
+  return jsonSuccess(res, syncedSession || session);
 };
 
 const deleteSession = async (
@@ -279,7 +324,7 @@ const deleteSession = async (
 
   const existingSession = await prisma.therapySession.findFirst({
     where: { id, entityId },
-    select: { id: true },
+    select: { id: true, prescriptionId: true },
   });
 
   if (!existingSession) {
@@ -287,6 +332,13 @@ const deleteSession = async (
   }
 
   await prisma.therapySession.delete({ where: { id } });
+
+  if (existingSession.prescriptionId) {
+    await recomputePrescriptionCompletedSessions(
+      existingSession.prescriptionId,
+      cabinet.cabinetId
+    );
+  }
 
   return jsonSuccess(res, { id });
 };
