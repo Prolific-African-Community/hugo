@@ -1,214 +1,152 @@
 import {
-  AccountType,
   AccountingStandard,
   EntityRole,
   EntityType,
-  OrganizationStatus,
+  InvoiceStatus,
   OrganizationRole,
+  OrganizationStatus,
   OrganizationType,
+  PatientStatus,
   PlatformRole,
+  PrescriptionStatus,
   PrismaClient,
-  TransactionType,
+  TherapySessionStatus,
   UserRole,
-} from '@prisma/client';
-import bcrypt from 'bcryptjs';
+} from "@prisma/client";
+import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-const ADMIN_EMAIL = 'admin@proliquid.local';
-const ADMIN_PASSWORD = 'Admin123!';
-const HUGO_EMAIL = 'hugo@local.test';
-const HUGO_PASSWORD = 'kine1234';
-const HUGO_ORGANIZATION_NAME = 'Cabinet Hugo';
-const HUGO_ENTITY_NAME = 'Cabinet Hugo';
-const ORGANIZATION_NAME = 'Hugo Demo Cabinet';
-const ENTITY_NAME = 'Hugo Demo Workspace';
-const TEMPLATE_NAME = 'Legacy Starter Template';
-const TEMPLATE_VERSION = '1.0.0';
+const HUGO_EMAIL = "hugo@local.test";
+const HUGO_PASSWORD = "kine1234";
+const HUGO_ORGANIZATION_NAME = "Cabinet Hugo";
+const HUGO_ENTITY_NAME = "Cabinet Hugo";
 
-const accounts = [
-  { code: '101000', label: 'Capital', accountClass: '1', type: AccountType.EQUITY },
-  { code: '401000', label: 'Suppliers', accountClass: '4', type: AccountType.LIABILITY },
-  { code: '411000', label: 'Customers', accountClass: '4', type: AccountType.ASSET },
-  { code: '451000', label: 'VAT Payable / Receivable', accountClass: '4', type: AccountType.LIABILITY },
-  { code: '513000', label: 'Bank', accountClass: '5', type: AccountType.ASSET },
-  { code: '600000', label: 'Purchases / Expenses', accountClass: '6', type: AccountType.EXPENSE },
-  { code: '626000', label: 'Bank Fees', accountClass: '6', type: AccountType.EXPENSE },
-  { code: '706000', label: 'Services Revenue', accountClass: '7', type: AccountType.INCOME },
-];
+const LEGACY_ADMIN_EMAIL = "admin@proliquid.local";
+const LEGACY_ORGANIZATION_NAME = "Hugo Demo Cabinet";
+const LEGACY_ENTITY_NAME = "Hugo Demo Workspace";
+const LEGACY_TEMPLATE_NAME = "Legacy Starter Template";
 
-const rules = [
-  {
-    transactionType: TransactionType.CUSTOMER_INVOICE,
-    debitAccountCode: '411000',
-    creditAccountCode: '706000',
-    descriptionTemplate: 'Customer invoice - {description}',
-  },
-  {
-    transactionType: TransactionType.CUSTOMER_PAYMENT,
-    debitAccountCode: '513000',
-    creditAccountCode: '411000',
-    descriptionTemplate: 'Customer payment - {description}',
-  },
-  {
-    transactionType: TransactionType.SUPPLIER_INVOICE,
-    debitAccountCode: '600000',
-    creditAccountCode: '401000',
-    descriptionTemplate: 'Supplier invoice - {description}',
-  },
-  {
-    transactionType: TransactionType.SUPPLIER_PAYMENT,
-    debitAccountCode: '401000',
-    creditAccountCode: '513000',
-    descriptionTemplate: 'Supplier payment - {description}',
-  },
-  {
-    transactionType: TransactionType.BANK_FEE,
-    debitAccountCode: '626000',
-    creditAccountCode: '513000',
-    descriptionTemplate: 'Bank fee - {description}',
-  },
-];
+const daysFromToday = (days: number, hour = 9, minute = 0) => {
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  date.setDate(date.getDate() + days);
+  return date;
+};
 
-async function main() {
-  const password = await bcrypt.hash(ADMIN_PASSWORD, 12);
-  const hugoPassword = await bcrypt.hash(HUGO_PASSWORD, 12);
+const findOrganizationByName = (name: string) => {
+  return prisma.organization.findFirst({ where: { name } });
+};
 
-  const admin = await prisma.user.upsert({
-    where: { email: ADMIN_EMAIL },
-    update: {
-      password,
-      role: UserRole.ADMIN,
-      platformRole: PlatformRole.SUPER_ADMIN,
-      mustChangePassword: false,
-    },
-    create: {
-      email: ADMIN_EMAIL,
-      password,
-      role: UserRole.ADMIN,
-      platformRole: PlatformRole.SUPER_ADMIN,
-      mustChangePassword: false,
-    },
+const findEntityByName = (organizationId: string, name: string) => {
+  return prisma.entity.findFirst({ where: { organizationId, name } });
+};
+
+const cleanupLegacySeed = async () => {
+  const legacyOrganization = await findOrganizationByName(
+    LEGACY_ORGANIZATION_NAME
+  );
+
+  if (legacyOrganization) {
+    const legacyEntity = await findEntityByName(
+      legacyOrganization.id,
+      LEGACY_ENTITY_NAME
+    );
+
+    if (legacyEntity) {
+      await prisma.accountingRule.deleteMany({
+        where: { entityId: legacyEntity.id },
+      });
+      await prisma.accountingPeriod.deleteMany({
+        where: { entityId: legacyEntity.id },
+      });
+      await prisma.chartOfAccount.updateMany({
+        where: { entityId: legacyEntity.id },
+        data: { isActive: false },
+      });
+      await prisma.entity.update({
+        where: { id: legacyEntity.id },
+        data: {
+          accountingTemplateId: null,
+          accountingInitializedAt: null,
+          isActive: false,
+        },
+      });
+    }
+
+    await prisma.organization.update({
+      where: { id: legacyOrganization.id },
+      data: {
+        status: OrganizationStatus.INACTIVE,
+        isActive: false,
+      },
+    });
+  }
+
+  const legacyTemplate = await prisma.accountingTemplate.findFirst({
+    where: { name: LEGACY_TEMPLATE_NAME },
   });
+
+  if (legacyTemplate) {
+    await prisma.accountingTemplate.update({
+      where: { id: legacyTemplate.id },
+      data: { isActive: false },
+    });
+    await prisma.accountingTemplateRule.deleteMany({
+      where: { templateId: legacyTemplate.id },
+    });
+    await prisma.accountingTemplateAccount.deleteMany({
+      where: { templateId: legacyTemplate.id },
+    });
+  }
+
+  const legacyAdmin = await prisma.user.findUnique({
+    where: { email: LEGACY_ADMIN_EMAIL },
+    select: { id: true },
+  });
+
+  if (legacyAdmin) {
+    await prisma.entityUser.deleteMany({ where: { userId: legacyAdmin.id } });
+    await prisma.organizationUser.deleteMany({
+      where: { userId: legacyAdmin.id },
+    });
+    await prisma.user.delete({ where: { id: legacyAdmin.id } });
+  }
+};
+
+const upsertHugoWorkspace = async () => {
+  const password = await bcrypt.hash(HUGO_PASSWORD, 12);
 
   const hugoUser = await prisma.user.upsert({
     where: { email: HUGO_EMAIL },
     update: {
-      password: hugoPassword,
+      password,
       role: UserRole.USER,
       platformRole: PlatformRole.NONE,
       mustChangePassword: false,
     },
     create: {
       email: HUGO_EMAIL,
-      password: hugoPassword,
+      password,
       role: UserRole.USER,
       platformRole: PlatformRole.NONE,
       mustChangePassword: false,
     },
   });
 
-  const existingHugoOrganization = await prisma.organization.findFirst({
-    where: { name: HUGO_ORGANIZATION_NAME },
-  });
-
-  const hugoOrganizationData = {
+  const organizationData = {
     name: HUGO_ORGANIZATION_NAME,
     legalName: HUGO_ORGANIZATION_NAME,
     type: OrganizationType.COMPANY,
-    country: 'LU',
-    baseCurrency: 'EUR',
+    country: "LU",
+    baseCurrency: "EUR",
     status: OrganizationStatus.ACTIVE,
     isActive: true,
   };
 
-  const hugoOrganization = existingHugoOrganization
-    ? await prisma.organization.update({
-        where: { id: existingHugoOrganization.id },
-        data: hugoOrganizationData,
-      })
-    : await prisma.organization.create({ data: hugoOrganizationData });
-
-  await prisma.organizationUser.upsert({
-    where: {
-      organizationId_userId: {
-        organizationId: hugoOrganization.id,
-        userId: hugoUser.id,
-      },
-    },
-    update: {
-      role: OrganizationRole.ORG_ADMIN,
-      isActive: true,
-    },
-    create: {
-      organizationId: hugoOrganization.id,
-      userId: hugoUser.id,
-      role: OrganizationRole.ORG_ADMIN,
-      isActive: true,
-    },
-  });
-
-  const existingHugoEntity = await prisma.entity.findFirst({
-    where: {
-      organizationId: hugoOrganization.id,
-      name: HUGO_ENTITY_NAME,
-    },
-  });
-
-  const hugoEntityData = {
-    organizationId: hugoOrganization.id,
-    name: HUGO_ENTITY_NAME,
-    legalName: HUGO_ENTITY_NAME,
-    type: EntityType.COMPANY,
-    country: 'LU',
-    baseCurrency: 'EUR',
-    accountingStandard: AccountingStandard.LUX_GAAP,
-    fiscalYearStartMonth: 1,
-    fiscalYearStartDay: 1,
-    fiscalYearEndMonth: 12,
-    fiscalYearEndDay: 31,
-    isActive: true,
-  };
-
-  const hugoEntity = existingHugoEntity
-    ? await prisma.entity.update({
-        where: { id: existingHugoEntity.id },
-        data: hugoEntityData,
-      })
-    : await prisma.entity.create({ data: hugoEntityData });
-
-  await prisma.entityUser.upsert({
-    where: {
-      entityId_userId: {
-        entityId: hugoEntity.id,
-        userId: hugoUser.id,
-      },
-    },
-    update: {
-      role: EntityRole.ENTITY_ADMIN,
-      isActive: true,
-    },
-    create: {
-      entityId: hugoEntity.id,
-      userId: hugoUser.id,
-      role: EntityRole.ENTITY_ADMIN,
-      isActive: true,
-    },
-  });
-
-  const existingOrganization = await prisma.organization.findFirst({
-    where: { name: ORGANIZATION_NAME },
-  });
-
-  const organizationData = {
-    name: ORGANIZATION_NAME,
-    legalName: ORGANIZATION_NAME,
-    type: OrganizationType.ASSET_MANAGER,
-    country: 'LU',
-    baseCurrency: 'EUR',
-    isActive: true,
-  };
-
+  const existingOrganization = await findOrganizationByName(
+    HUGO_ORGANIZATION_NAME
+  );
   const organization = existingOrganization
     ? await prisma.organization.update({
         where: { id: existingOrganization.id },
@@ -216,40 +154,16 @@ async function main() {
       })
     : await prisma.organization.create({ data: organizationData });
 
-  await prisma.organizationUser.upsert({
-    where: {
-      organizationId_userId: {
-        organizationId: organization.id,
-        userId: admin.id,
-      },
-    },
-    update: {
-      role: OrganizationRole.ORG_ADMIN,
-      isActive: true,
-    },
-    create: {
-      organizationId: organization.id,
-      userId: admin.id,
-      role: OrganizationRole.ORG_ADMIN,
-      isActive: true,
-    },
-  });
-
-  const existingEntity = await prisma.entity.findFirst({
-    where: {
-      organizationId: organization.id,
-      name: ENTITY_NAME,
-    },
-  });
-
   const entityData = {
     organizationId: organization.id,
-    name: ENTITY_NAME,
-    legalName: ENTITY_NAME,
+    name: HUGO_ENTITY_NAME,
+    legalName: HUGO_ENTITY_NAME,
     type: EntityType.COMPANY,
-    country: 'LU',
-    baseCurrency: 'EUR',
+    country: "LU",
+    baseCurrency: "EUR",
     accountingStandard: AccountingStandard.LUX_GAAP,
+    accountingTemplateId: null,
+    accountingInitializedAt: null,
     fiscalYearStartMonth: 1,
     fiscalYearStartDay: 1,
     fiscalYearEndMonth: 12,
@@ -257,6 +171,10 @@ async function main() {
     isActive: true,
   };
 
+  const existingEntity = await findEntityByName(
+    organization.id,
+    HUGO_ENTITY_NAME
+  );
   const entity = existingEntity
     ? await prisma.entity.update({
         where: { id: existingEntity.id },
@@ -264,11 +182,30 @@ async function main() {
       })
     : await prisma.entity.create({ data: entityData });
 
+  await prisma.organizationUser.upsert({
+    where: {
+      organizationId_userId: {
+        organizationId: organization.id,
+        userId: hugoUser.id,
+      },
+    },
+    update: {
+      role: OrganizationRole.ORG_ADMIN,
+      isActive: true,
+    },
+    create: {
+      organizationId: organization.id,
+      userId: hugoUser.id,
+      role: OrganizationRole.ORG_ADMIN,
+      isActive: true,
+    },
+  });
+
   await prisma.entityUser.upsert({
     where: {
       entityId_userId: {
         entityId: entity.id,
-        userId: admin.id,
+        userId: hugoUser.id,
       },
     },
     update: {
@@ -277,184 +214,324 @@ async function main() {
     },
     create: {
       entityId: entity.id,
-      userId: admin.id,
+      userId: hugoUser.id,
       role: EntityRole.ENTITY_ADMIN,
       isActive: true,
     },
   });
 
-  const accountIds = new Map<string, string>();
+  return { hugoUser, organization, entity };
+};
 
-  for (const account of accounts) {
-    const seededAccount = await prisma.chartOfAccount.upsert({
-      where: {
-        entityId_code: {
-          entityId: entity.id,
-          code: account.code,
-        },
-      },
-      update: {
-        ...account,
-        jurisdiction: 'LU',
-        standard: AccountingStandard.LUX_GAAP,
-        isSystem: true,
-        isActive: true,
-      },
-      create: {
-        entityId: entity.id,
-        ...account,
-        jurisdiction: 'LU',
-        standard: AccountingStandard.LUX_GAAP,
-        isSystem: true,
-        isActive: true,
-      },
-    });
+const cleanupHugoMocks = async (entityId: string) => {
+  await prisma.invoice.deleteMany({ where: { entityId } });
+  await prisma.therapySession.deleteMany({ where: { entityId } });
+  await prisma.prescription.deleteMany({ where: { entityId } });
+  await prisma.patient.deleteMany({ where: { entityId } });
+};
 
-    accountIds.set(account.code, seededAccount.id);
-  }
-
-  for (const rule of rules) {
-    const debitAccountId = accountIds.get(rule.debitAccountCode);
-    const creditAccountId = accountIds.get(rule.creditAccountCode);
-
-    if (!debitAccountId || !creditAccountId) {
-      throw new Error(`Missing chart account for ${rule.transactionType}`);
-    }
-
-    const existingRule = await prisma.accountingRule.findFirst({
-      where: {
-        entityId: entity.id,
-        transactionType: rule.transactionType,
-      },
-    });
-
-    const ruleData = {
-      entityId: entity.id,
-      transactionType: rule.transactionType,
-      debitAccountId,
-      creditAccountId,
-      descriptionTemplate: rule.descriptionTemplate,
-      priority: 100,
-      isActive: true,
-    };
-
-    if (existingRule) {
-      await prisma.accountingRule.update({
-        where: { id: existingRule.id },
-        data: ruleData,
-      });
-    } else {
-      await prisma.accountingRule.create({ data: ruleData });
-    }
-  }
-
-  const existingTemplate = await prisma.accountingTemplate.findFirst({
-    where: {
-      name: TEMPLATE_NAME,
-      version: TEMPLATE_VERSION,
-      jurisdiction: 'LU',
-      standard: AccountingStandard.LUX_GAAP,
+const createPatients = async (entityId: string) => {
+  const patients = [
+    {
+      firstName: "Claire",
+      lastName: "Muller",
+      email: "claire.muller@example.test",
+      phone: "+352 621 111 001",
+      address: "12 Rue des Bains, L-1212 Luxembourg",
+      cnsNumber: "1990010112345",
+      status: PatientStatus.ACTIVE,
+      notes: "Reprise après lombalgie, préfère rendez-vous matin.",
     },
-  });
+    {
+      firstName: "Marc",
+      lastName: "Weber",
+      email: "marc.weber@example.test",
+      phone: "+352 621 111 002",
+      address: "8 Avenue de la Gare, L-1610 Luxembourg",
+      cnsNumber: "1988071512345",
+      status: PatientStatus.ACTIVE,
+      notes: "Rééducation genou, sportif.",
+    },
+    {
+      firstName: "Sophie",
+      lastName: "Laurent",
+      email: "sophie.laurent@example.test",
+      phone: "+352 621 111 003",
+      address: "4 Rue du Fort, L-2340 Luxembourg",
+      cnsNumber: "1979120312345",
+      status: PatientStatus.ACTIVE,
+      notes: "Douleurs cervicales, agenda variable.",
+    },
+    {
+      firstName: "Amir",
+      lastName: "Benali",
+      email: "amir.benali@example.test",
+      phone: "+352 621 111 004",
+      address: "21 Rue de Hollerich, L-1741 Luxembourg",
+      cnsNumber: "1992052212345",
+      status: PatientStatus.ACTIVE,
+      notes: "Épaule droite, séances en fin de journée.",
+    },
+    {
+      firstName: "Elise",
+      lastName: "Hoffmann",
+      email: "elise.hoffmann@example.test",
+      phone: "+352 621 111 005",
+      address: "6 Rue Jean Origer, L-2269 Luxembourg",
+      cnsNumber: "1968110912345",
+      status: PatientStatus.ACTIVE,
+      notes: "Suivi post-opératoire, attention fatigue.",
+    },
+  ];
 
-  const templateData = {
-    name: TEMPLATE_NAME,
-    version: TEMPLATE_VERSION,
-    jurisdiction: 'LU',
-    standard: AccountingStandard.LUX_GAAP,
-    description:
-      'Starter operational template for Luxembourg entities. This is not the full PCN.',
-    isSystem: true,
-    isActive: true,
-  };
-
-  const template = existingTemplate
-    ? await prisma.accountingTemplate.update({
-        where: { id: existingTemplate.id },
-        data: templateData,
+  const createdPatients = await Promise.all(
+    patients.map((patient) =>
+      prisma.patient.create({
+        data: {
+          entityId,
+          ...patient,
+        },
       })
-    : await prisma.accountingTemplate.create({ data: templateData });
+    )
+  );
 
-  for (const account of accounts) {
-    await prisma.accountingTemplateAccount.upsert({
-      where: {
-        templateId_code: {
-          templateId: template.id,
-          code: account.code,
+  return Object.fromEntries(
+    createdPatients.map((patient) => [patient.firstName, patient])
+  );
+};
+
+const createPrescriptions = async (
+  entityId: string,
+  patients: Awaited<ReturnType<typeof createPatients>>
+) => {
+  const prescriptions = await Promise.all([
+    prisma.prescription.create({
+      data: {
+        entityId,
+        patientId: patients.Claire.id,
+        title: "Rééducation lombaire",
+        prescribedSessions: 20,
+        completedSessions: 0,
+        startDate: daysFromToday(-35),
+        status: PrescriptionStatus.ACTIVE,
+        notes: "Programme progressif de stabilisation lombaire.",
+      },
+    }),
+    prisma.prescription.create({
+      data: {
+        entityId,
+        patientId: patients.Marc.id,
+        title: "Rééducation genou droit",
+        prescribedSessions: 15,
+        completedSessions: 0,
+        startDate: daysFromToday(-20),
+        status: PrescriptionStatus.ACTIVE,
+        notes: "Renforcement et reprise sportive progressive.",
+      },
+    }),
+    prisma.prescription.create({
+      data: {
+        entityId,
+        patientId: patients.Sophie.id,
+        title: "Cervicalgies chroniques",
+        prescribedSessions: 10,
+        completedSessions: 0,
+        startDate: daysFromToday(-45),
+        endDate: daysFromToday(-2),
+        status: PrescriptionStatus.COMPLETED,
+        notes: "Cycle terminé, suivi ponctuel à prévoir si récidive.",
+      },
+    }),
+    prisma.prescription.create({
+      data: {
+        entityId,
+        patientId: patients.Elise.id,
+        title: "Suivi post-opératoire",
+        prescribedSessions: 30,
+        completedSessions: 0,
+        startDate: daysFromToday(-25),
+        status: PrescriptionStatus.ACTIVE,
+        notes: "Progression douce, surveiller la fatigue.",
+      },
+    }),
+  ]);
+
+  return Object.fromEntries(
+    prescriptions.map((prescription) => [prescription.title, prescription])
+  );
+};
+
+const createSessions = async (
+  entityId: string,
+  patients: Awaited<ReturnType<typeof createPatients>>,
+  prescriptions: Awaited<ReturnType<typeof createPrescriptions>>
+) => {
+  const sessions = [
+    ...Array.from({ length: 18 }).map((_, index) => ({
+      patientId: patients.Claire.id,
+      prescriptionId: prescriptions["Rééducation lombaire"].id,
+      sessionNumber: index + 1,
+      status: TherapySessionStatus.COMPLETED,
+      scheduledAt: daysFromToday(-36 + index * 2, 8, 30),
+      completedAt: daysFromToday(-36 + index * 2, 9, 15),
+      notes: "Séance lombaire réalisée.",
+    })),
+    {
+      patientId: patients.Claire.id,
+      prescriptionId: prescriptions["Rééducation lombaire"].id,
+      sessionNumber: 19,
+      status: TherapySessionStatus.PLANNED,
+      scheduledAt: daysFromToday(0, 9, 0),
+      completedAt: null,
+      notes: "Point sur douleurs matinales.",
+    },
+    ...Array.from({ length: 4 }).map((_, index) => ({
+      patientId: patients.Marc.id,
+      prescriptionId: prescriptions["Rééducation genou droit"].id,
+      sessionNumber: index + 1,
+      status: TherapySessionStatus.COMPLETED,
+      scheduledAt: daysFromToday(-18 + index * 4, 17, 30),
+      completedAt: daysFromToday(-18 + index * 4, 18, 15),
+      notes: "Renforcement genou droit.",
+    })),
+    {
+      patientId: patients.Marc.id,
+      prescriptionId: prescriptions["Rééducation genou droit"].id,
+      sessionNumber: 5,
+      status: TherapySessionStatus.PLANNED,
+      scheduledAt: daysFromToday(0, 14, 30),
+      completedAt: null,
+      notes: "Travail proprioception.",
+    },
+    ...Array.from({ length: 10 }).map((_, index) => ({
+      patientId: patients.Sophie.id,
+      prescriptionId: prescriptions["Cervicalgies chroniques"].id,
+      sessionNumber: index + 1,
+      status: TherapySessionStatus.COMPLETED,
+      scheduledAt: daysFromToday(-40 + index * 4, 11, 0),
+      completedAt: daysFromToday(-40 + index * 4, 11, 45),
+      notes: "Mobilité cervicale.",
+    })),
+    ...Array.from({ length: 6 }).map((_, index) => ({
+      patientId: patients.Elise.id,
+      prescriptionId: prescriptions["Suivi post-opératoire"].id,
+      sessionNumber: index + 1,
+      status: TherapySessionStatus.COMPLETED,
+      scheduledAt: daysFromToday(-24 + index * 4, 10, 30),
+      completedAt: daysFromToday(-24 + index * 4, 11, 15),
+      notes: "Suivi post-opératoire réalisé.",
+    })),
+    {
+      patientId: patients.Elise.id,
+      prescriptionId: prescriptions["Suivi post-opératoire"].id,
+      sessionNumber: 7,
+      status: TherapySessionStatus.PLANNED,
+      scheduledAt: daysFromToday(2, 10, 0),
+      completedAt: null,
+      notes: "Progression douce.",
+    },
+  ];
+
+  await Promise.all(
+    sessions.map((session) =>
+      prisma.therapySession.create({
+        data: {
+          entityId,
+          ...session,
         },
-      },
-      update: {
-        ...account,
-        isActive: true,
-      },
-      create: {
-        templateId: template.id,
-        ...account,
-        isActive: true,
-      },
-    });
-  }
+      })
+    )
+  );
 
-  for (const rule of rules) {
-    const existingTemplateRule = await prisma.accountingTemplateRule.findFirst({
-      where: {
-        templateId: template.id,
-        transactionType: rule.transactionType,
-        debitAccountCode: rule.debitAccountCode,
-        creditAccountCode: rule.creditAccountCode,
-      },
-    });
+  return sessions.length;
+};
 
-    const templateRuleData = {
-      templateId: template.id,
-      transactionType: rule.transactionType,
-      debitAccountCode: rule.debitAccountCode,
-      creditAccountCode: rule.creditAccountCode,
-      descriptionTemplate: rule.descriptionTemplate,
-      priority: 100,
-      isActive: true,
-    };
-
-    if (existingTemplateRule) {
-      await prisma.accountingTemplateRule.update({
-        where: { id: existingTemplateRule.id },
-        data: templateRuleData,
+const recomputePrescriptionCompletedSessions = async (
+  entityId: string,
+  prescriptionIds: string[]
+) => {
+  await Promise.all(
+    prescriptionIds.map(async (prescriptionId) => {
+      const completedSessions = await prisma.therapySession.count({
+        where: {
+          entityId,
+          prescriptionId,
+          status: TherapySessionStatus.COMPLETED,
+        },
       });
-    } else {
-      await prisma.accountingTemplateRule.create({ data: templateRuleData });
-    }
-  }
 
-  const year = new Date().getUTCFullYear();
-  const periodName = 'Current fiscal year';
-  const existingPeriod = await prisma.accountingPeriod.findFirst({
-    where: {
-      entityId: entity.id,
-      name: periodName,
+      await prisma.prescription.update({
+        where: { id: prescriptionId },
+        data: { completedSessions },
+      });
+    })
+  );
+};
+
+const createInvoices = async (
+  entityId: string,
+  patients: Awaited<ReturnType<typeof createPatients>>,
+  prescriptions: Awaited<ReturnType<typeof createPrescriptions>>
+) => {
+  // Invoice is used here as internal CNS billing tracking, not as official invoice generation.
+  await prisma.invoice.create({
+    data: {
+      entityId,
+      patientId: patients.Sophie.id,
+      prescriptionId: prescriptions["Cervicalgies chroniques"].id,
+      invoiceNumber: "CNS-2026-0001",
+      status: InvoiceStatus.PAID,
+      amountCents: 72000,
+      currency: "EUR",
+      issuedAt: daysFromToday(-10, 9, 0),
+      dueAt: daysFromToday(20, 9, 0),
+      paidAt: daysFromToday(-3, 9, 0),
     },
   });
 
-  const periodData = {
-    entityId: entity.id,
-    name: periodName,
-    startDate: new Date(Date.UTC(year, 0, 1)),
-    endDate: new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999)),
-    status: 'OPEN' as const,
-    closedAt: null,
-  };
+  await prisma.invoice.create({
+    data: {
+      entityId,
+      patientId: patients.Claire.id,
+      prescriptionId: prescriptions["Rééducation lombaire"].id,
+      invoiceNumber: null,
+      status: InvoiceStatus.DRAFT,
+      amountCents: 0,
+      currency: "EUR",
+      issuedAt: null,
+      dueAt: null,
+      paidAt: null,
+    },
+  });
 
-  if (existingPeriod) {
-    await prisma.accountingPeriod.update({
-      where: { id: existingPeriod.id },
-      data: periodData,
-    });
-  } else {
-    await prisma.accountingPeriod.create({ data: periodData });
-  }
+  return 2;
+};
 
-  console.log(
-    `Seeded ${ADMIN_EMAIL}, ${HUGO_EMAIL}, ${HUGO_ORGANIZATION_NAME}, ${HUGO_ENTITY_NAME}, ${ORGANIZATION_NAME}, ${ENTITY_NAME}, and ${TEMPLATE_NAME}.`
+async function main() {
+  await cleanupLegacySeed();
+
+  const { entity } = await upsertHugoWorkspace();
+
+  await cleanupHugoMocks(entity.id);
+
+  const patients = await createPatients(entity.id);
+  const prescriptions = await createPrescriptions(entity.id, patients);
+  const sessionCount = await createSessions(entity.id, patients, prescriptions);
+
+  await recomputePrescriptionCompletedSessions(
+    entity.id,
+    Object.values(prescriptions).map((prescription) => prescription.id)
   );
+
+  const invoiceCount = await createInvoices(entity.id, patients, prescriptions);
+
+  console.log("Hugo seed completed");
+  console.log(`Login email: ${HUGO_EMAIL}`);
+  console.log("Initial password: kine1234");
+  console.log(`Patients: ${Object.keys(patients).length}`);
+  console.log(`Prescriptions: ${Object.keys(prescriptions).length}`);
+  console.log(`Séances: ${sessionCount}`);
+  console.log(`Factures: ${invoiceCount}`);
 }
 
 main()
