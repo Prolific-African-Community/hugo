@@ -446,6 +446,12 @@ export default function TodayDashboard() {
               Cockpit
             </NavButton>
             <NavButton
+              icon="calendar"
+              onClick={() => router.push("/dashboard/appointments")}
+            >
+              Rendez-vous
+            </NavButton>
+            <NavButton
               icon="user"
               onClick={() => router.push(`/dashboard/patients${entityQuery}`)}
             >

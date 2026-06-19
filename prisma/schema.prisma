@@ -168,6 +168,12 @@ enum AppointmentStatus {
   MISSED
 }
 
+enum AppointmentSource {
+  MANUAL
+  APPLE_CALENDAR
+  DOCTENA
+}
+
 enum InvoiceStatus {
   DRAFT
   READY
@@ -704,6 +710,7 @@ model Appointment {
   startsAt  DateTime
   endsAt    DateTime
   status    AppointmentStatus @default(SCHEDULED)
+  source    AppointmentSource @default(MANUAL)
   notes     String?
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
@@ -711,6 +718,7 @@ model Appointment {
   @@index([entityId])
   @@index([entityId, startsAt])
   @@index([entityId, status])
+  @@index([entityId, source])
   @@index([patientId])
   @@index([startsAt])
   @@index([status])
