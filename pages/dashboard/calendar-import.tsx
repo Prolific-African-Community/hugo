@@ -300,6 +300,14 @@ export default function CalendarImportPage() {
               <Icon name="calendar" className="h-3.5 w-3.5 text-cyan-700/60" />
               Rendez-vous
             </button>
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/calendar-settings")}
+              className={BUTTON_LIGHT}
+            >
+              <Icon name="calendar" className="h-3.5 w-3.5 text-cyan-700/60" />
+              Connexion agenda
+            </button>
           </div>
         </nav>
       </header>
