@@ -3,6 +3,7 @@ import type { NextApiResponse } from "next";
 import { jsonError, jsonSuccess } from "../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
 import { requireHugoCabinet } from "../../../../lib/hugo-auth";
+import { matchPatientFromEventTitle } from "../../../../lib/patient-matching";
 import { prisma } from "../../../../lib/prisma";
 
 interface CalendarImportEvent {
@@ -34,13 +35,7 @@ const appointmentInclude = {
   },
 };
 
-const normalize = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+const AUTO_MATCH_THRESHOLD = 0.7;
 
 const parseRequiredString = (value: unknown) => {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -70,22 +65,6 @@ const serializeAppointment = <
     linkedSessionId: session?.id || null,
     hasSession: Boolean(session?.id),
   };
-};
-
-const findPatientFromTitle = <
-  T extends { id: string; firstName: string; lastName: string }
->(
-  title: string,
-  patients: T[]
-) => {
-  const normalizedTitle = normalize(title);
-
-  return (
-    patients.find((patient) => {
-      const fullName = normalize(`${patient.firstName} ${patient.lastName}`);
-      return fullName && normalizedTitle.includes(fullName);
-    }) || null
-  );
 };
 
 const buildImportedNotes = ({
@@ -155,7 +134,11 @@ const importCalendarEvents = async (
       return jsonError(res, 400, "Each event endsAt must be after startsAt");
     }
 
-    const patient = findPatientFromTitle(title, patients);
+    const match = matchPatientFromEventTitle(title, patients);
+    const patient =
+      match.patientId && match.confidence >= AUTO_MATCH_THRESHOLD
+        ? patients.find((item) => item.id === match.patientId) || null
+        : null;
     const importedNotes = buildImportedNotes({
       externalId,
       title,
@@ -184,8 +167,12 @@ const importCalendarEvents = async (
         startsAt: startsAt.toISOString(),
         endsAt: endsAt.toISOString(),
         notes: importedNotes,
+        matchedAutomatically: false,
+        confidence: match.confidence,
         reason:
-          "No matching patient found. Appointment.patientId is required in the current schema, so no appointment was created.",
+          match.confidence > 0
+            ? `${match.reason}. Confiance trop faible pour créer automatiquement le rendez-vous.`
+            : "Aucun patient reconnu. Appointment.patientId est obligatoire dans le schéma actuel, donc aucun rendez-vous n'a été créé.",
       });
       continue;
     }
@@ -205,7 +192,12 @@ const importCalendarEvents = async (
       });
 
       updatedCount += 1;
-      appointments.push(serializeAppointment(appointment));
+      appointments.push({
+        ...serializeAppointment(appointment),
+        matchedAutomatically: true,
+        confidence: match.confidence,
+        reason: match.reason,
+      });
       continue;
     }
 
@@ -223,7 +215,12 @@ const importCalendarEvents = async (
     });
 
     importedCount += 1;
-    appointments.push(serializeAppointment(appointment));
+    appointments.push({
+      ...serializeAppointment(appointment),
+      matchedAutomatically: true,
+      confidence: match.confidence,
+      reason: match.reason,
+    });
   }
 
   return jsonSuccess(res, {
