@@ -1,46 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 
-type PatientStatus = "ACTIVE" | "INACTIVE" | "ARCHIVED";
 type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
 type TherapySessionStatus = "PLANNED" | "COMPLETED" | "CANCELLED" | "MISSED";
+type BillingActionType = "ATTENTION" | "DRAFT" | "READY";
 
 interface Cabinet {
   cabinetId: string;
   name: string;
 }
 
-interface Patient {
-  id: string;
-  firstName: string;
-  lastName: string;
-  status: PatientStatus;
-  updatedAt: string;
-}
-
-interface Prescription {
-  id: string;
-  title: string;
-  status: PrescriptionStatus;
-  prescribedSessions: number;
-  completedSessions: number;
-  patient?: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  } | null;
-}
-
 interface TherapySession {
   id: string;
   sessionNumber: number;
   scheduledAt?: string | null;
+  completedAt?: string | null;
   status: TherapySessionStatus;
-  patient?: {
+  patient: {
+    id: string;
     firstName: string;
     lastName: string;
-  } | null;
-  prescription?: {
+  };
+  prescription: {
     id: string;
     title: string;
     prescribedSessions: number;
@@ -49,23 +30,8 @@ interface TherapySession {
   } | null;
 }
 
-interface DashboardMetrics {
-  activePatientsCount: number;
-  activePrescriptionsCount: number;
-  upcomingSessionsCount: number;
-  nearlyCompletedPrescriptionsCount: number;
-}
-
-interface DashboardPayload {
-  cabinet: Cabinet;
-  metrics: DashboardMetrics;
-  todaySessions: TherapySession[];
-  upcomingSessions: TherapySession[];
-  nearlyCompletedPrescriptions: Prescription[];
-  recentPatients: Patient[];
-}
-
-interface BillingReadinessItem {
+interface BillingAction {
+  type: BillingActionType;
   patient: {
     id: string;
     firstName: string;
@@ -83,10 +49,19 @@ interface BillingReadinessItem {
   completionDate?: string | null;
 }
 
-interface BillingReadinessPayload {
-  prescriptionsNeedingAttention: BillingReadinessItem[];
-  invoiceDraftCandidates: BillingReadinessItem[];
-  invoiceReadyCandidates: BillingReadinessItem[];
+interface TodaySummary {
+  patientsToday: number;
+  sessionsToday: number;
+  invoicesToPrepare: number;
+  invoicesReady: number;
+}
+
+interface TodayPayload {
+  cabinet: Cabinet;
+  todaySessions: TherapySession[];
+  upcomingSessions: TherapySession[];
+  billingActions: BillingAction[];
+  summary: TodaySummary;
 }
 
 interface ApiResponse<T> {
@@ -96,6 +71,16 @@ interface ApiResponse<T> {
 }
 
 type ClassValue = string | false | null | undefined;
+type IconName =
+  | "grid"
+  | "user"
+  | "document"
+  | "calendar"
+  | "receipt"
+  | "clock"
+  | "alert"
+  | "spark"
+  | "check";
 
 const cn = (...classes: ClassValue[]) => classes.filter(Boolean).join(" ");
 const PAGE_BG = "bg-[#f7f8f6]";
@@ -106,18 +91,13 @@ const BUTTON_DARK =
 const BUTTON_LIGHT =
   "inline-flex items-center justify-center gap-2 rounded-full border border-white/70 bg-white/55 px-4 py-2.5 text-xs font-semibold text-black/72 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black disabled:cursor-not-allowed disabled:opacity-50";
 
-type IconName =
-  | "grid"
-  | "user"
-  | "document"
-  | "calendar"
-  | "receipt"
-  | "sun"
-  | "clock"
-  | "alert"
-  | "spark";
-
-function Icon({ name, className = "h-4 w-4" }: { name: IconName; className?: string }) {
+function Icon({
+  name,
+  className = "h-4 w-4",
+}: {
+  name: IconName;
+  className?: string;
+}) {
   const paths: Record<IconName, JSX.Element> = {
     grid: (
       <>
@@ -157,17 +137,6 @@ function Icon({ name, className = "h-4 w-4" }: { name: IconName; className?: str
         <path d="M9.5 16h3" />
       </>
     ),
-    sun: (
-      <>
-        <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" />
-        <path d="M12 2v3" />
-        <path d="M12 19v3" />
-        <path d="M4.9 4.9 7 7" />
-        <path d="m17 17 2.1 2.1" />
-        <path d="M2 12h3" />
-        <path d="M19 12h3" />
-      </>
-    ),
     clock: (
       <>
         <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" />
@@ -187,10 +156,25 @@ function Icon({ name, className = "h-4 w-4" }: { name: IconName; className?: str
         <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />
       </>
     ),
+    check: (
+      <>
+        <path d="m5 13 4 4L19 7" />
+        <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z" />
+      </>
+    ),
   };
 
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.55"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
       {paths[name]}
     </svg>
   );
@@ -225,41 +209,43 @@ function NavButton({
   );
 }
 
-function MetricCard({
+function StatPill({
   label,
   value,
-  detail,
-  accent,
-  icon,
-  tone = "bg-cyan-50 text-cyan-700",
+  tone,
 }: {
   label: string;
   value: string | number;
-  detail: string;
-  accent?: boolean;
-  icon: IconName;
-  tone?: string;
+  tone: string;
 }) {
   return (
-    <div className={cn(CARD, "min-h-[150px] p-5")}>
-      <div className="flex items-start justify-between gap-4">
-        <p className="max-w-[11rem] text-[11px] font-semibold uppercase tracking-[0.12em] text-black/45">
-          {label}
-        </p>
-        <span
-          className={cn(
-            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
-            tone,
-            accent && "ring-4 ring-cyan-100/70"
-          )}
-        >
-          <Icon name={icon} className="h-4 w-4" />
-        </span>
-      </div>
-      <p className="mt-7 text-4xl font-bold tracking-[-0.05em]">{value}</p>
-      <p className="mt-3 text-sm font-medium leading-6 text-black/50">{detail}</p>
+    <div className={cn("rounded-2xl border px-4 py-3 backdrop-blur-xl", tone)}>
+      <p className="text-2xl font-bold tracking-[-0.05em]">{value}</p>
+      <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] opacity-70">
+        {label}
+      </p>
     </div>
   );
+}
+
+function formatTodayDate() {
+  return new Intl.DateTimeFormat("fr-LU", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+  }).format(new Date());
+}
+
+function formatTime(value?: string | null) {
+  if (!value) return "--:--";
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "--:--"
+    : new Intl.DateTimeFormat("fr-LU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
 }
 
 function formatSessionDate(value?: string | null) {
@@ -276,81 +262,41 @@ function formatSessionDate(value?: string | null) {
       }).format(date);
 }
 
-function patientName(session: TherapySession) {
-  if (!session.patient) return "Patient";
-  return `${session.patient.firstName} ${session.patient.lastName}`.trim();
+function patientName(patient?: { firstName: string; lastName: string } | null) {
+  if (!patient) return "Patient";
+  return `${patient.firstName} ${patient.lastName}`.trim();
 }
 
-function readinessPatientName(item: BillingReadinessItem) {
-  return `${item.patient.firstName} ${item.patient.lastName}`.trim();
-}
-
-function BillingReadinessList({
-  empty,
-  creatingDraftId,
-  items,
-  onCreateDraft,
-  tone,
-}: {
-  empty: string;
-  creatingDraftId?: string | null;
-  items: BillingReadinessItem[];
-  onCreateDraft?: (item: BillingReadinessItem) => void;
-  tone: string;
-}) {
-  if (!items.length) {
-    return <p className="mt-4 text-sm font-medium text-black/45">{empty}</p>;
+function actionCopy(action: BillingAction) {
+  if (action.type === "READY") {
+    return {
+      icon: "check" as IconName,
+      label: "Facture a valider",
+      tone: "border-[#dbead7]/80 bg-[#f0f8ee]/75 text-[#5f7f68]",
+      action: "Valider",
+    };
   }
 
-  return (
-    <div className="mt-4 divide-y divide-black/5">
-      {items.slice(0, 5).map((item) => (
-        <div key={item.prescription.id} className="py-4 first:pt-0 last:pb-0">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="font-semibold">{readinessPatientName(item)}</p>
-              <p className="mt-1 text-sm font-medium text-black/55">
-                {item.prescription.title}
-              </p>
-            </div>
-            <span className="w-fit rounded-full bg-[#f4f4f7] px-3 py-1 text-[10px] font-semibold text-black/55">
-              {tone}
-            </span>
-          </div>
-          <p className="mt-3 text-xs font-medium text-black/45">
-            {item.completedSessions} / {item.prescribedSessions} seances
-            realisees · {item.remainingSessions} restante
-            {item.remainingSessions > 1 ? "s" : ""}
-          </p>
-          {onCreateDraft && (
-            <button
-              type="button"
-              onClick={() => onCreateDraft(item)}
-              disabled={creatingDraftId === item.prescription.id}
-              className={cn(BUTTON_DARK, "mt-3 px-3 py-2")}
-            >
-              {creatingDraftId === item.prescription.id
-                ? "Creation..."
-                : "Créer brouillon"}
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
-  );
+  if (action.type === "DRAFT") {
+    return {
+      icon: "spark" as IconName,
+      label: "Facture a preparer",
+      tone: "border-cyan-100/80 bg-cyan-50/65 text-cyan-800/75",
+      action: "Creer brouillon",
+    };
+  }
+
+  return {
+    icon: "alert" as IconName,
+    label: "Prescription bientot terminee",
+    tone: "border-[#eadfca]/70 bg-[#fff8ea]/75 text-[#7b6745]",
+    action: "Surveiller",
+  };
 }
 
-export default function WorkspaceDashboard() {
+export default function TodayDashboard() {
   const router = useRouter();
-  const [cabinet, setCabinet] = useState<Cabinet | null>(null);
-  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
-  const [todaySessions, setTodaySessions] = useState<TherapySession[]>([]);
-  const [upcomingSessions, setUpcomingSessions] = useState<TherapySession[]>([]);
-  const [nearlyCompletedPrescriptions, setNearlyCompletedPrescriptions] =
-    useState<Prescription[]>([]);
-  const [recentPatients, setRecentPatients] = useState<Patient[]>([]);
-  const [billingReadiness, setBillingReadiness] =
-    useState<BillingReadinessPayload | null>(null);
+  const [data, setData] = useState<TodayPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creatingDraftId, setCreatingDraftId] = useState<string | null>(null);
@@ -382,42 +328,25 @@ export default function WorkspaceDashboard() {
     }
 
     if (!response.ok || !payload.success) {
-      throw new Error(payload.message || "Impossible de charger le cockpit");
+      throw new Error(payload.message || "Impossible de charger aujourd'hui");
     }
 
     return payload.data as T;
   };
 
-  const loadBillingReadiness = async () => {
-    const billingData = await request<BillingReadinessPayload>(
-      "/api/hugo/billing-readiness"
-    );
-    setBillingReadiness(billingData);
-    return billingData;
-  };
-
-  const loadCockpit = async (showRefresh = false) => {
+  const loadToday = async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     setError(null);
     if (showRefresh) setSuccess(null);
 
     try {
-      const [data, billingData] = await Promise.all([
-        request<DashboardPayload>("/api/hugo/dashboard"),
-        loadBillingReadiness(),
-      ]);
-      setCabinet(data.cabinet);
-      setMetrics(data.metrics);
-      setTodaySessions(data.todaySessions);
-      setUpcomingSessions(data.upcomingSessions);
-      setNearlyCompletedPrescriptions(data.nearlyCompletedPrescriptions);
-      setRecentPatients(data.recentPatients);
-      setBillingReadiness(billingData);
+      const todayData = await request<TodayPayload>("/api/hugo/today");
+      setData(todayData);
     } catch (loadError) {
       setError(
         loadError instanceof Error
           ? loadError.message
-          : "Impossible de charger le cockpit"
+          : "Impossible de charger aujourd'hui"
       );
     } finally {
       setLoading(false);
@@ -425,19 +354,19 @@ export default function WorkspaceDashboard() {
     }
   };
 
-  const handleCreateDraft = async (item: BillingReadinessItem) => {
-    setCreatingDraftId(item.prescription.id);
+  const handleCreateDraft = async (action: BillingAction) => {
+    setCreatingDraftId(action.prescription.id);
     setError(null);
     setSuccess(null);
 
     try {
       await request("/api/hugo/invoices/create-draft", {
         method: "POST",
-        body: JSON.stringify({ prescriptionId: item.prescription.id }),
+        body: JSON.stringify({ prescriptionId: action.prescription.id }),
       });
-      await loadBillingReadiness();
+      await loadToday();
       setSuccess(
-        `Brouillon cree pour ${readinessPatientName(item)} - ${item.prescription.title}.`
+        `Brouillon cree pour ${patientName(action.patient)} - ${action.prescription.title}.`
       );
     } catch (createError) {
       setError(
@@ -452,12 +381,17 @@ export default function WorkspaceDashboard() {
 
   useEffect(() => {
     if (!router.isReady) return;
-    loadCockpit();
+    loadToday();
   }, [router.isReady]);
 
-  const entityQuery = cabinet
-    ? `?entityId=${encodeURIComponent(cabinet.cabinetId)}`
+  const entityQuery = data?.cabinet
+    ? `?entityId=${encodeURIComponent(data.cabinet.cabinetId)}`
     : "";
+
+  const importantActions = useMemo(
+    () => (data?.billingActions || []).slice(0, 8),
+    [data?.billingActions]
+  );
 
   return (
     <div className={cn(PAGE_BG, "min-h-screen text-black")}>
@@ -465,20 +399,33 @@ export default function WorkspaceDashboard() {
         <nav className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-5">
           <LogoMark />
           <div className="flex flex-wrap gap-3">
-            <NavButton icon="grid" onClick={() => router.push("/dashboard")}>Cockpit</NavButton>
-            <NavButton icon="user" onClick={() => router.push(`/dashboard/patients${entityQuery}`)}>
+            <NavButton icon="grid" onClick={() => router.push("/dashboard")}>
+              Cockpit
+            </NavButton>
+            <NavButton
+              icon="user"
+              onClick={() => router.push(`/dashboard/patients${entityQuery}`)}
+            >
               Patients
             </NavButton>
             <NavButton
               icon="document"
-              onClick={() => router.push(`/dashboard/prescriptions${entityQuery}`)}
+              onClick={() =>
+                router.push(`/dashboard/prescriptions${entityQuery}`)
+              }
             >
               Prescriptions
             </NavButton>
-            <NavButton icon="calendar" onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}>
+            <NavButton
+              icon="calendar"
+              onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
+            >
               Séances
             </NavButton>
-            <NavButton icon="receipt" onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}>
+            <NavButton
+              icon="receipt"
+              onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
+            >
               Factures
             </NavButton>
           </div>
@@ -486,33 +433,76 @@ export default function WorkspaceDashboard() {
       </header>
 
       <main className="mx-auto max-w-7xl px-6 pb-16 pt-8">
-        <section className={cn(CARD, "p-6")}>
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <section className={cn(CARD, "relative overflow-hidden p-6 sm:p-8")}>
+          <div className="pointer-events-none absolute right-0 top-0 h-52 w-52 rounded-full bg-cyan-100/45 blur-3xl" />
+          <div className="pointer-events-none absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-[#fff0df]/70 blur-3xl" />
+
+          <div className="relative flex flex-col gap-7 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Cockpit
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                {data?.cabinet.name || "Cabinet Hugo"}
               </p>
-              <h1 className="mt-3 text-3xl font-bold tracking-[-0.04em]">
-                Aujourd'hui
+              <h1 className="mt-3 text-4xl font-bold tracking-[-0.055em] sm:text-5xl">
+                Bonjour Hugo
               </h1>
-              <p className="mt-2 max-w-2xl text-sm font-medium leading-6 text-black/50">
-                {cabinet?.name || "Cabinet"} - l'essentiel pour garder la
-                journee lisible.
+              <p className="mt-3 text-base font-medium capitalize text-black/48">
+                {formatTodayDate()}
               </p>
             </div>
 
+            <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[560px]">
+              <StatPill
+                label="Patients"
+                value={loading ? "..." : data?.summary.patientsToday ?? 0}
+                tone="border-[#dcebd7]/80 bg-[#eef6ec]/80 text-[#4f755b]"
+              />
+              <StatPill
+                label="Séances"
+                value={loading ? "..." : data?.summary.sessionsToday ?? 0}
+                tone="border-cyan-100/80 bg-cyan-50/70 text-cyan-800/75"
+              />
+              <StatPill
+                label="À préparer"
+                value={loading ? "..." : data?.summary.invoicesToPrepare ?? 0}
+                tone="border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]"
+              />
+              <StatPill
+                label="À valider"
+                value={loading ? "..." : data?.summary.invoicesReady ?? 0}
+                tone="border-[#f3ddd7]/80 bg-[#fff1ed]/80 text-[#9a6657]"
+              />
+            </div>
+          </div>
+
+          <div className="relative mt-7 flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={() => loadCockpit(true)}
+              onClick={() => loadToday(true)}
               disabled={refreshing}
               className={BUTTON_DARK}
             >
               {refreshing ? "Actualisation..." : "Actualiser"}
             </button>
+            <button
+              type="button"
+              onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
+              className={BUTTON_LIGHT}
+            >
+              <Icon name="calendar" className="h-3.5 w-3.5" />
+              Ajouter séance
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
+              className={BUTTON_LIGHT}
+            >
+              <Icon name="receipt" className="h-3.5 w-3.5" />
+              Factures
+            </button>
           </div>
         </section>
 
-        {error && (
+        {(error || success) && (
           <section className="mt-4 space-y-3">
             {error && (
               <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-bold text-red-700">
@@ -526,208 +516,147 @@ export default function WorkspaceDashboard() {
             )}
           </section>
         )}
-        {!error && success && (
-          <section className="mt-4">
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-bold text-emerald-700">
-              {success}
-            </div>
-          </section>
-        )}
 
-        <section className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            label="Résumé du jour"
-            value={loading ? "..." : todaySessions.length}
-            detail="seance(s) planifiee(s) aujourd'hui"
-            accent
-            icon="sun"
-            tone="bg-cyan-50 text-cyan-700"
-          />
-          <MetricCard
-            label="Patients actifs"
-            value={loading ? "..." : metrics?.activePatientsCount ?? 0}
-            detail="patients suivis dans le cabinet"
-            icon="user"
-            tone="bg-[#eef6ec] text-[#5f7f68]"
-          />
-          <MetricCard
-            label="Prescriptions actives"
-            value={loading ? "..." : metrics?.activePrescriptionsCount ?? 0}
-            detail="prescriptions encore ouvertes"
-            icon="document"
-            tone="bg-[#fbf3df] text-[#927341]"
-          />
-          <MetricCard
-            label="Séances à venir"
-            value={loading ? "..." : metrics?.upcomingSessionsCount ?? 0}
-            detail="prochaines seances a garder en vue"
-            icon="clock"
-            tone="bg-[#edf7fb] text-[#4f7f92]"
-          />
-        </section>
-
-        <section className={cn(CARD, "mt-4 overflow-hidden")}>
-          <div className="flex flex-col gap-3 border-b border-black/5 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-                Factures à préparer
-              </p>
-              <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em]">
-                Alertes de facturation
-              </h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
-              className={BUTTON_LIGHT}
-            >
-              Voir les factures
-            </button>
-          </div>
-
-          {loading ? (
-            <div className="grid gap-4 p-5 lg:grid-cols-3">
-              {Array.from({ length: 3 }).map((_, index) => (
-                <div key={index} className="h-40 animate-pulse rounded-2xl bg-black/5" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid gap-4 p-5 lg:grid-cols-3">
-              <div className="rounded-2xl border border-[#eadfca]/70 bg-[#fff8ea]/70 p-4 backdrop-blur-xl">
-                <h3 className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em] text-[#7b6745]">
-                  <Icon name="alert" className="h-4 w-4" />
-                  À surveiller
-                </h3>
-                <BillingReadinessList
-                  empty="Aucune prescription proche de la facturation."
-                  items={billingReadiness?.prescriptionsNeedingAttention || []}
-                  tone="Bientôt"
-                />
-              </div>
-
-              <div className="rounded-2xl border border-cyan-100/70 bg-cyan-50/55 p-4 backdrop-blur-xl">
-                <h3 className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em] text-cyan-800/75">
-                  <Icon name="spark" className="h-4 w-4" />
-                  Brouillon suggéré
-                </h3>
-                <BillingReadinessList
-                  empty="Aucun brouillon suggéré pour l'instant."
-                  creatingDraftId={creatingDraftId}
-                  items={billingReadiness?.invoiceDraftCandidates || []}
-                  onCreateDraft={handleCreateDraft}
-                  tone="Préparer"
-                />
-              </div>
-
-              <div className="rounded-2xl border border-[#dbead7]/80 bg-[#f0f8ee]/70 p-4 backdrop-blur-xl">
-                <h3 className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em] text-[#5f7f68]">
-                  <Icon name="receipt" className="h-4 w-4" />
-                  Prête à valider
-                </h3>
-                <BillingReadinessList
-                  empty="Aucune facture prête à valider."
-                  items={billingReadiness?.invoiceReadyCandidates || []}
-                  tone="Valider"
-                />
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="mt-4 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className={cn(CARD, "p-5")}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-500">
-              Actions rapides
-            </p>
-            <div className="mt-5 grid gap-3">
-              <button
-                type="button"
-                onClick={() => router.push(`/dashboard/patients${entityQuery}`)}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#dcebd7] bg-[#eef6ec] px-4 py-2.5 text-xs font-semibold text-[#4f755b] shadow-[0_10px_24px_rgba(79,117,91,0.07)] transition hover:-translate-y-px hover:bg-[#e5f1e2]"
-              >
-                <Icon name="user" className="h-3.5 w-3.5" />
-                Ajouter patient
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push(`/dashboard/prescriptions${entityQuery}`)}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#eadfca] bg-[#fff7e6] px-4 py-2.5 text-xs font-semibold text-[#7b6745] shadow-[0_10px_24px_rgba(123,103,69,0.06)] transition hover:-translate-y-px hover:bg-[#fff2d2]"
-              >
-                <Icon name="document" className="h-3.5 w-3.5" />
-                Ajouter prescription
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-cyan-100 bg-cyan-50 px-4 py-2.5 text-xs font-semibold text-cyan-800/75 shadow-[0_10px_24px_rgba(14,116,144,0.055)] transition hover:-translate-y-px hover:bg-cyan-100/55"
-              >
-                <Icon name="calendar" className="h-3.5 w-3.5" />
-                Ajouter séance
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#f3ddd7] bg-[#fff1ed] px-4 py-2.5 text-xs font-semibold text-[#9a6657] shadow-[0_10px_24px_rgba(154,102,87,0.055)] transition hover:-translate-y-px hover:bg-[#ffe9e2]"
-              >
-                <Icon name="receipt" className="h-3.5 w-3.5" />
-                Ajouter facture
-              </button>
-            </div>
-            <div className="mt-6 border-t border-black/5 pt-5">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/40">
-                Patients récents
-              </p>
-              {!recentPatients.length ? (
-                <p className="mt-4 text-sm font-medium text-black/45">
-                  Aucun patient récent.
+        <section className="mt-4 grid gap-4 xl:grid-cols-[1.28fr_0.72fr]">
+          <div className={cn(CARD, "overflow-hidden")}>
+            <div className="flex items-end justify-between gap-4 border-b border-black/5 px-5 py-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                  Agenda
                 </p>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  {recentPatients.map((patient) => (
-                    <div
-                      key={patient.id}
-                      className="flex items-center justify-between gap-3 text-sm"
-                    >
-                      <span className="font-semibold">
-                        {patient.firstName} {patient.lastName}
-                      </span>
-                      <span className="rounded-full bg-[#f4f4f7] px-2.5 py-1 text-[10px] font-semibold text-black/45">
-                        {patient.status}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
+                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
+                  Patients aujourd'hui
+                </h2>
+              </div>
+              <Icon name="calendar" className="h-5 w-5 text-cyan-700/45" />
             </div>
+
+            {loading ? (
+              <div className="space-y-3 p-5">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="h-20 animate-pulse rounded-3xl bg-black/5"
+                  />
+                ))}
+              </div>
+            ) : !data?.todaySessions.length ? (
+              <div className="px-5 py-16 text-center">
+                <p className="text-lg font-semibold tracking-[-0.03em]">
+                  Aucun patient prévu aujourd'hui.
+                </p>
+                <p className="mt-2 text-sm font-medium text-black/45">
+                  La journee est libre pour l'instant.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-black/5">
+                {data.todaySessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className="grid gap-4 px-5 py-5 transition hover:bg-white/45 sm:grid-cols-[90px_1fr_auto] sm:items-center"
+                  >
+                    <div className="rounded-2xl border border-cyan-100/80 bg-cyan-50/60 px-4 py-3 text-center text-lg font-bold tracking-[-0.04em] text-cyan-900/75">
+                      {formatTime(session.scheduledAt)}
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold tracking-[-0.03em]">
+                        {patientName(session.patient)}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-black/45">
+                        {session.prescription?.title || "Prescription"} · séance{" "}
+                        {session.sessionNumber}
+                      </p>
+                    </div>
+                    <span className="w-fit rounded-full border border-white/70 bg-white/65 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
+                      {session.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className={cn(CARD, "overflow-hidden")}>
-            <div className="border-b border-black/5 px-5 py-4">
-              <h2 className="text-xl font-semibold tracking-[-0.03em]">
-                Prescriptions presque terminées
-              </h2>
+            <div className="flex items-end justify-between gap-4 border-b border-black/5 px-5 py-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                  Priorités
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
+                  Actions importantes
+                </h2>
+              </div>
+              <Icon name="spark" className="h-5 w-5 text-[#9a6657]/50" />
             </div>
-            {!nearlyCompletedPrescriptions.length ? (
-              <p className="px-5 py-10 text-sm font-medium text-black/45">
+
+            {loading ? (
+              <div className="space-y-3 p-5">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="h-24 animate-pulse rounded-3xl bg-black/5"
+                  />
+                ))}
+              </div>
+            ) : !importantActions.length ? (
+              <p className="px-5 py-12 text-sm font-medium text-black/45">
                 Rien d'urgent pour le moment.
               </p>
             ) : (
-              <div className="divide-y divide-black/5">
-                {nearlyCompletedPrescriptions.map((prescription) => {
-                  const remaining =
-                    prescription.prescribedSessions -
-                    prescription.completedSessions;
+              <div className="space-y-3 p-5">
+                {importantActions.map((action) => {
+                  const copy = actionCopy(action);
 
                   return (
-                    <div key={prescription.id} className="px-5 py-4">
-                      <p className="font-semibold">{prescription.title}</p>
-                      <p className="mt-1 text-xs font-medium text-black/45">
-                        {prescription.patient
-                          ? `${prescription.patient.firstName} ${prescription.patient.lastName} · `
-                          : ""}
-                        {remaining} seance{remaining > 1 ? "s" : ""} restante
-                        {remaining > 1 ? "s" : ""}
+                    <div
+                      key={`${action.type}-${action.prescription.id}`}
+                      className={cn("rounded-3xl border p-4", copy.tone)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em]">
+                            <Icon name={copy.icon} className="h-4 w-4" />
+                            {copy.label}
+                          </p>
+                          <p className="mt-3 font-semibold text-black/78">
+                            {patientName(action.patient)}
+                          </p>
+                          <p className="mt-1 text-xs font-medium text-black/45">
+                            {action.prescription.title}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white/55 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/45">
+                          {action.remainingSessions} restante
+                          {action.remainingSessions > 1 ? "s" : ""}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-xs font-medium text-black/45">
+                        {action.completedSessions} / {action.prescribedSessions}{" "}
+                        séances réalisées
                       </p>
+                      {action.type === "DRAFT" ? (
+                        <button
+                          type="button"
+                          onClick={() => handleCreateDraft(action)}
+                          disabled={creatingDraftId === action.prescription.id}
+                          className={cn(BUTTON_DARK, "mt-4 px-3 py-2")}
+                        >
+                          {creatingDraftId === action.prescription.id
+                            ? "Creation..."
+                            : copy.action}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            router.push(`/dashboard/invoices${entityQuery}`)
+                          }
+                          className={cn(BUTTON_LIGHT, "mt-4 px-3 py-2")}
+                        >
+                          {copy.action}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -737,42 +666,58 @@ export default function WorkspaceDashboard() {
         </section>
 
         <section className={cn(CARD, "mt-4 overflow-hidden")}>
-          <div className="border-b border-black/5 px-5 py-4">
-            <h2 className="text-xl font-semibold tracking-[-0.03em]">
-              Prochaines séances
-            </h2>
-          </div>
-          {loading ? (
-            <div className="px-5 py-10">
-              <div className="animate-pulse space-y-3">
-                {Array.from({ length: 3 }).map((_, index) => (
-                  <div key={index} className="h-14 rounded-2xl bg-black/5" />
-                ))}
-              </div>
+          <div className="flex items-end justify-between gap-4 border-b border-black/5 px-5 py-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                À venir
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
+                Prochaines séances
+              </h2>
             </div>
-          ) : !upcomingSessions.length ? (
-            <p className="px-5 py-10 text-sm font-medium text-black/45">
-              Aucune seance a venir pour l'instant.
+            <button
+              type="button"
+              onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
+              className={BUTTON_LIGHT}
+            >
+              Voir les séances
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="grid gap-3 p-5 md:grid-cols-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="h-24 animate-pulse rounded-3xl bg-black/5"
+                />
+              ))}
+            </div>
+          ) : !data?.upcomingSessions.length ? (
+            <p className="px-5 py-12 text-sm font-medium text-black/45">
+              Aucune séance à venir pour l'instant.
             </p>
           ) : (
-            <div className="divide-y divide-black/5">
-              {upcomingSessions.map((session) => (
+            <div className="grid gap-3 p-5 md:grid-cols-2">
+              {data.upcomingSessions.map((session) => (
                 <div
                   key={session.id}
-                  className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                  className="rounded-3xl border border-white/70 bg-white/50 p-4 backdrop-blur-xl transition hover:bg-white/75"
                 >
-                  <div>
-                    <p className="font-semibold">
-                      {patientName(session)} - seance {session.sessionNumber}
-                    </p>
-                    <p className="mt-1 text-xs font-medium text-black/45">
-                      {session.prescription?.title || "Prescription"} ·{" "}
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="font-semibold tracking-[-0.02em]">
+                        {patientName(session.patient)}
+                      </p>
+                      <p className="mt-1 text-xs font-medium text-black/45">
+                        {session.prescription?.title || "Prescription"} · séance{" "}
+                        {session.sessionNumber}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-cyan-50 px-3 py-1 text-[10px] font-semibold text-cyan-800/65">
                       {formatSessionDate(session.scheduledAt)}
-                    </p>
+                    </span>
                   </div>
-                  <span className="w-fit rounded-full bg-[#f4f4f7] px-3 py-1 text-[10px] font-semibold text-black/55">
-                    {session.status}
-                  </span>
                 </div>
               ))}
             </div>
