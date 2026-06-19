@@ -300,6 +300,9 @@ export default function TodayDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creatingDraftId, setCreatingDraftId] = useState<string | null>(null);
+  const [completingSessionId, setCompletingSessionId] = useState<string | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -376,6 +379,46 @@ export default function TodayDashboard() {
       );
     } finally {
       setCreatingDraftId(null);
+    }
+  };
+
+  const handleCompleteSession = async (session: TherapySession) => {
+    if (!data?.cabinet.cabinetId) {
+      setError("Cabinet introuvable.");
+      return;
+    }
+
+    if (!session.prescription?.id) {
+      setError("Prescription introuvable pour cette séance.");
+      return;
+    }
+
+    setCompletingSessionId(session.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await request(`/api/hugo/sessions/${session.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          entityId: data.cabinet.cabinetId,
+          patientId: session.patient.id,
+          prescriptionId: session.prescription.id,
+          sessionNumber: session.sessionNumber,
+          status: "COMPLETED",
+          completedAt: new Date().toISOString(),
+        }),
+      });
+      await loadToday();
+      setSuccess(`Séance réalisée pour ${patientName(session.patient)}.`);
+    } catch (completeError) {
+      setError(
+        completeError instanceof Error
+          ? completeError.message
+          : "Impossible de marquer la séance comme réalisée"
+      );
+    } finally {
+      setCompletingSessionId(null);
     }
   };
 
@@ -568,9 +611,24 @@ export default function TodayDashboard() {
                         {session.sessionNumber}
                       </p>
                     </div>
-                    <span className="w-fit rounded-full border border-white/70 bg-white/65 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
-                      {session.status}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                      <span className="w-fit rounded-full border border-white/70 bg-white/65 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
+                        {session.status}
+                      </span>
+                      {session.status !== "COMPLETED" && (
+                        <button
+                          type="button"
+                          onClick={() => handleCompleteSession(session)}
+                          disabled={completingSessionId === session.id}
+                          className="inline-flex items-center justify-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68] shadow-[0_10px_24px_rgba(79,117,91,0.055)] transition hover:-translate-y-px hover:bg-[#e6f3e2] disabled:cursor-not-allowed disabled:opacity-55"
+                        >
+                          <Icon name="check" className="h-3.5 w-3.5" />
+                          {completingSessionId === session.id
+                            ? "Validation..."
+                            : "Marquer réalisée"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
