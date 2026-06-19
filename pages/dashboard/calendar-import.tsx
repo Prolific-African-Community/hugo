@@ -320,14 +320,17 @@ export default function CalendarImportPage() {
           <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
-                Agenda externe
+                Outil interne de test
               </p>
               <h1 className="mt-3 text-4xl font-bold tracking-[-0.055em] sm:text-5xl">
                 Import agenda
               </h1>
               <p className="mt-3 text-base font-medium text-black/48">
-                Test d'import Apple Calendar
+                Ne pas utiliser pour la synchronisation réelle.
               </p>
+              <div className="mt-5 inline-flex rounded-full border border-[#eadfca]/80 bg-[#fff7e6]/80 px-4 py-2 text-xs font-semibold text-[#7b6745]">
+                Mock dev uniquement
+              </div>
             </div>
             <button
               type="button"

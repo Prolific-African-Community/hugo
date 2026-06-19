@@ -367,14 +367,6 @@ export default function CalendarSettingsPage() {
             </button>
             <button
               type="button"
-              onClick={() => router.push("/dashboard/calendar-import")}
-              className={BUTTON_LIGHT}
-            >
-              <Icon name="upload" className="h-3.5 w-3.5 text-cyan-700/60" />
-              Import agenda
-            </button>
-            <button
-              type="button"
               onClick={() => router.push("/dashboard/appointments")}
               className={BUTTON_LIGHT}
             >
@@ -405,11 +397,11 @@ export default function CalendarSettingsPage() {
             </div>
             <button
               type="button"
-              onClick={() => router.push("/dashboard/calendar-import")}
+              onClick={() => router.push("/dashboard/appointments")}
               className={BUTTON_DARK}
             >
-              <Icon name="upload" className="h-3.5 w-3.5" />
-              Tester un import
+              <Icon name="calendar" className="h-3.5 w-3.5" />
+              Voir les rendez-vous
             </button>
           </div>
         </section>
