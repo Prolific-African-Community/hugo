@@ -42,6 +42,15 @@ interface TodayAppointment {
   linkedSession: LinkedSession | null;
 }
 
+interface Prescription {
+  id: string;
+  patientId: string;
+  title: string;
+  prescribedSessions: number;
+  completedSessions: number;
+  status: PrescriptionStatus;
+}
+
 interface BillingAction {
   type: BillingActionType;
   patient: {
@@ -310,9 +319,14 @@ function actionCopy(action: BillingAction) {
 export default function TodayDashboard() {
   const router = useRouter();
   const [data, setData] = useState<TodayPayload | null>(null);
+  const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creatingDraftId, setCreatingDraftId] = useState<string | null>(null);
+  const [creatingSessionAppointmentId, setCreatingSessionAppointmentId] =
+    useState<string | null>(null);
+  const [selectedPrescriptionByAppointment, setSelectedPrescriptionByAppointment] =
+    useState<Record<string, string>>({});
   const [completingSessionId, setCompletingSessionId] = useState<string | null>(
     null
   );
@@ -358,6 +372,13 @@ export default function TodayDashboard() {
     try {
       const todayData = await request<TodayPayload>("/api/hugo/today");
       setData(todayData);
+
+      const prescriptionData = await request<Prescription[]>(
+        `/api/hugo/prescriptions?entityId=${encodeURIComponent(
+          todayData.cabinet.cabinetId
+        )}`
+      );
+      setPrescriptions(prescriptionData);
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -392,6 +413,49 @@ export default function TodayDashboard() {
       );
     } finally {
       setCreatingDraftId(null);
+    }
+  };
+
+  const activePrescriptionsForPatient = (patientId: string) => {
+    return prescriptions.filter(
+      (prescription) =>
+        prescription.patientId === patientId && prescription.status === "ACTIVE"
+    );
+  };
+
+  const handleCreateSession = async (appointment: TodayAppointment) => {
+    const patientPrescriptions = activePrescriptionsForPatient(
+      appointment.patient.id
+    );
+    const prescriptionId =
+      selectedPrescriptionByAppointment[appointment.id] ||
+      patientPrescriptions[0]?.id;
+
+    if (!prescriptionId) {
+      setError("Aucune prescription active");
+      setSuccess(null);
+      return;
+    }
+
+    setCreatingSessionAppointmentId(appointment.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await request(`/api/hugo/appointments/${appointment.id}/create-session`, {
+        method: "POST",
+        body: JSON.stringify({ prescriptionId }),
+      });
+      await loadToday();
+      setSuccess(`Séance créée pour ${patientName(appointment.patient)}.`);
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Impossible de créer la séance"
+      );
+    } finally {
+      setCreatingSessionAppointmentId(null);
     }
   };
 
@@ -634,6 +698,13 @@ export default function TodayDashboard() {
                   const canCompleteSession = Boolean(
                     linkedSession && linkedSession.status !== "COMPLETED"
                   );
+                  const patientPrescriptions = activePrescriptionsForPatient(
+                    appointment.patient.id
+                  );
+                  const selectedPrescriptionId =
+                    selectedPrescriptionByAppointment[appointment.id] ||
+                    patientPrescriptions[0]?.id ||
+                    "";
 
                   return (
                   <div
@@ -679,9 +750,56 @@ export default function TodayDashboard() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                       {!appointment.hasSession && (
-                        <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-2 text-xs font-semibold text-[#7b6745]">
-                          À transformer
-                        </span>
+                        <div className="grid min-w-[230px] gap-2 sm:justify-items-end">
+                          {patientPrescriptions.length ? (
+                            <select
+                              value={selectedPrescriptionId}
+                              onChange={(event) =>
+                                setSelectedPrescriptionByAppointment(
+                                  (current) => ({
+                                    ...current,
+                                    [appointment.id]: event.target.value,
+                                  })
+                                )
+                              }
+                              className="w-full rounded-full border border-white/80 bg-white/65 px-3 py-2 text-xs font-semibold text-black/65 outline-none shadow-[0_10px_24px_rgba(54,69,79,0.035)] backdrop-blur-xl transition focus:border-cyan-200 focus:bg-white/90 focus:ring-4 focus:ring-cyan-100/45 sm:w-[230px]"
+                            >
+                              {patientPrescriptions.map((prescription) => {
+                                const remaining =
+                                  prescription.prescribedSessions -
+                                  prescription.completedSessions;
+
+                                return (
+                                  <option
+                                    key={prescription.id}
+                                    value={prescription.id}
+                                  >
+                                    {prescription.title} - {remaining} restante
+                                    {remaining > 1 ? "s" : ""}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          ) : (
+                            <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-2 text-xs font-semibold text-[#7b6745]">
+                              Aucune prescription active
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleCreateSession(appointment)}
+                            disabled={
+                              creatingSessionAppointmentId === appointment.id ||
+                              !patientPrescriptions.length
+                            }
+                            className="inline-flex items-center justify-center gap-2 rounded-full border border-cyan-100/80 bg-cyan-50/70 px-3 py-2 text-xs font-semibold text-cyan-800/75 shadow-[0_10px_24px_rgba(8,145,178,0.045)] transition hover:-translate-y-px hover:bg-cyan-100/60 disabled:cursor-not-allowed disabled:opacity-55"
+                          >
+                            <Icon name="calendar" className="h-3.5 w-3.5" />
+                            {creatingSessionAppointmentId === appointment.id
+                              ? "Création..."
+                              : "Créer séance"}
+                          </button>
+                        </div>
                       )}
                       {canCompleteSession && linkedSession && (
                         <button
