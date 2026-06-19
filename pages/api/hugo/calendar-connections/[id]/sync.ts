@@ -1,4 +1,8 @@
-import { AppointmentSource, AppointmentStatus, CalendarConnectionStatus } from "@prisma/client";
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  CalendarConnectionStatus,
+} from "@prisma/client";
 import type { NextApiResponse } from "next";
 import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
@@ -15,6 +19,7 @@ interface IcsEvent {
 }
 
 const AUTO_MATCH_THRESHOLD = 0.7;
+const MAX_SYNC_EVENTS = 50;
 
 const appointmentInclude = {
   patient: {
@@ -159,6 +164,35 @@ const buildImportedNotes = ({
     .join("\n");
 };
 
+const toSyncEventPayload = ({
+  uid,
+  summary,
+  startsAt,
+  endsAt,
+  confidence,
+  reason,
+  patientName,
+  appointmentId,
+}: {
+  uid: string | null;
+  summary: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+  confidence: number;
+  reason: string;
+  patientName: string | null;
+  appointmentId: string | null;
+}) => ({
+  uid,
+  summary,
+  startsAt: startsAt?.toISOString() || null,
+  endsAt: endsAt?.toISOString() || null,
+  confidence,
+  reason,
+  patientName,
+  appointmentId,
+});
+
 const syncCalendarConnection = async (
   req: AuthenticatedNextApiRequest,
   res: NextApiResponse
@@ -194,7 +228,7 @@ const syncCalendarConnection = async (
     }
 
     const ics = await response.text();
-    const events = parseIcsEvents(ics);
+    const events = parseIcsEvents(ics).slice(0, MAX_SYNC_EVENTS);
     const patients = await prisma.patient.findMany({
       where: { entityId: cabinet.cabinetId },
       select: {
@@ -209,6 +243,7 @@ const syncCalendarConnection = async (
     let unmatchedCount = 0;
     let skippedCount = 0;
     const appointments = [];
+    const recognizedEvents = [];
     const unmatchedEvents = [];
     const skippedEvents = [];
 
@@ -218,21 +253,31 @@ const syncCalendarConnection = async (
 
       if (!uid || !summary || !event.startsAt || !event.endsAt) {
         skippedCount += 1;
-        skippedEvents.push({
-          uid,
-          summary,
+        skippedEvents.push(toSyncEventPayload({
+          uid: uid || null,
+          summary: summary || null,
+          startsAt: event.startsAt,
+          endsAt: event.endsAt,
+          confidence: 0,
           reason: "VEVENT incomplet: UID, SUMMARY, DTSTART ou DTEND manquant",
-        });
+          patientName: null,
+          appointmentId: null,
+        }));
         continue;
       }
 
       if (event.endsAt <= event.startsAt) {
         skippedCount += 1;
-        skippedEvents.push({
+        skippedEvents.push(toSyncEventPayload({
           uid,
           summary,
+          startsAt: event.startsAt,
+          endsAt: event.endsAt,
+          confidence: 0,
           reason: "VEVENT ignoré: DTEND doit être après DTSTART",
-        });
+          patientName: null,
+          appointmentId: null,
+        }));
         continue;
       }
 
@@ -260,18 +305,19 @@ const syncCalendarConnection = async (
 
       if (!patient) {
         unmatchedCount += 1;
-        unmatchedEvents.push({
+        unmatchedEvents.push(toSyncEventPayload({
           uid,
-          title: summary,
-          startsAt: event.startsAt.toISOString(),
-          endsAt: event.endsAt.toISOString(),
-          description: event.description,
+          summary,
+          startsAt: event.startsAt,
+          endsAt: event.endsAt,
           confidence: match.confidence,
           reason:
             match.confidence > 0
               ? `${match.reason}. Confiance trop faible pour créer automatiquement le rendez-vous.`
               : "Aucun patient reconnu.",
-        });
+          patientName: null,
+          appointmentId: null,
+        }));
         continue;
       }
 
@@ -296,6 +342,16 @@ const syncCalendarConnection = async (
           confidence: match.confidence,
           reason: match.reason,
         });
+        recognizedEvents.push(toSyncEventPayload({
+          uid,
+          summary,
+          startsAt: event.startsAt,
+          endsAt: event.endsAt,
+          confidence: match.confidence,
+          reason: match.reason,
+          patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+          appointmentId: appointment.id,
+        }));
         continue;
       }
 
@@ -319,6 +375,16 @@ const syncCalendarConnection = async (
         confidence: match.confidence,
         reason: match.reason,
       });
+      recognizedEvents.push(toSyncEventPayload({
+        uid,
+        summary,
+        startsAt: event.startsAt,
+        endsAt: event.endsAt,
+        confidence: match.confidence,
+        reason: match.reason,
+        patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+        appointmentId: appointment.id,
+      }));
     }
 
     const updatedConnection = await prisma.calendarConnection.update({
@@ -342,6 +408,7 @@ const syncCalendarConnection = async (
       unmatchedCount,
       skippedCount,
       appointments,
+      recognizedEvents,
       unmatchedEvents,
       skippedEvents,
       connection: updatedConnection,

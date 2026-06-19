@@ -28,11 +28,31 @@ interface CalendarConnectionForm {
   calendarUrl: string;
 }
 
+interface Patient {
+  id: string;
+  firstName: string;
+  lastName: string;
+}
+
+interface CalendarSyncEvent {
+  uid: string | null;
+  summary: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
+  confidence: number;
+  reason: string;
+  patientName: string | null;
+  appointmentId: string | null;
+}
+
 interface CalendarSyncResult {
   importedCount: number;
   updatedCount: number;
   unmatchedCount: number;
   skippedCount: number;
+  recognizedEvents: CalendarSyncEvent[];
+  unmatchedEvents: CalendarSyncEvent[];
+  skippedEvents: CalendarSyncEvent[];
   connection: Pick<
     CalendarConnection,
     "id" | "status" | "lastSyncedAt" | "lastError"
@@ -151,9 +171,36 @@ function formatDate(value?: string | null) {
   }).format(date);
 }
 
+function patientName(patient: Patient) {
+  return `${patient.firstName} ${patient.lastName}`.trim();
+}
+
+function confidencePercent(confidence?: number) {
+  return `${Math.round((confidence ?? 0) * 100)}%`;
+}
+
+function confidenceTone(confidence?: number) {
+  const score = confidence ?? 0;
+
+  if (score >= 0.9) {
+    return "border-[#dbead7]/80 bg-[#f0f8ee]/75 text-[#5f7f68]";
+  }
+
+  if (score >= 0.7) {
+    return "border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]";
+  }
+
+  return "border-[#f3ddd7]/80 bg-[#fff1ed]/80 text-[#9a6657]";
+}
+
+function eventKey(event: CalendarSyncEvent) {
+  return event.uid || `${event.summary || "event"}-${event.startsAt || "date"}`;
+}
+
 export default function CalendarSettingsPage() {
   const router = useRouter();
   const [connections, setConnections] = useState<CalendarConnection[]>([]);
+  const [patients, setPatients] = useState<Patient[]>([]);
   const [form, setForm] = useState<CalendarConnectionForm>(emptyForm());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -161,6 +208,12 @@ export default function CalendarSettingsPage() {
   const [syncResults, setSyncResults] = useState<Record<string, CalendarSyncResult>>(
     {}
   );
+  const [selectedPatientByEvent, setSelectedPatientByEvent] = useState<
+    Record<string, string>
+  >({});
+  const [creatingAppointmentKey, setCreatingAppointmentKey] = useState<
+    string | null
+  >(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +250,13 @@ export default function CalendarSettingsPage() {
     return payload.data as T;
   };
 
+  const loadPatients = async (entityId: string) => {
+    const data = await request<Patient[]>(
+      `/api/hugo/patients?entityId=${encodeURIComponent(entityId)}`
+    );
+    setPatients(data);
+  };
+
   const loadConnections = async () => {
     setError(null);
 
@@ -205,6 +265,9 @@ export default function CalendarSettingsPage() {
         "/api/hugo/calendar-connections"
       );
       setConnections(data);
+      if (data[0]?.entityId) {
+        await loadPatients(data[0].entityId);
+      }
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -236,6 +299,7 @@ export default function CalendarSettingsPage() {
         }
       );
       setConnections((current) => [connection, ...current]);
+      await loadPatients(connection.entityId);
       setForm(emptyForm());
       setSuccess("Connexion Apple Calendar enregistrée.");
     } catch (saveError) {
@@ -321,6 +385,93 @@ export default function CalendarSettingsPage() {
       await loadConnections();
     } finally {
       setSyncingId(null);
+    }
+  };
+
+  const handleCreateAppointmentFromEvent = async (
+    connection: CalendarConnection,
+    event: CalendarSyncEvent
+  ) => {
+    const key = `${connection.id}:${eventKey(event)}`;
+    const patientId = selectedPatientByEvent[key];
+    const patient = patients.find((item) => item.id === patientId);
+
+    if (!patientId || !patient) {
+      setError("Choisissez un patient pour créer le rendez-vous.");
+      setSuccess(null);
+      return;
+    }
+
+    if (!event.startsAt || !event.endsAt) {
+      setError("Impossible de créer un rendez-vous sans date de début et de fin.");
+      setSuccess(null);
+      return;
+    }
+
+    setCreatingAppointmentKey(key);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const appointment = await request<{ id: string }>(
+        "/api/hugo/appointments",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            patientId,
+            startsAt: event.startsAt,
+            endsAt: event.endsAt,
+            status: "SCHEDULED",
+            source: "APPLE_CALENDAR",
+            notes: [
+              event.uid ? `[Apple Calendar UID:${event.uid}]` : null,
+              `Titre: ${event.summary || "Sans titre"}`,
+              "Validation manuelle depuis Connexion agenda",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          }),
+        }
+      );
+
+      const validatedEvent: CalendarSyncEvent = {
+        ...event,
+        appointmentId: appointment.id,
+        patientName: patientName(patient),
+        confidence: 1,
+        reason: "Validé manuellement par le praticien.",
+      };
+
+      setSyncResults((current) => {
+        const currentResult = current[connection.id];
+        if (!currentResult) return current;
+
+        return {
+          ...current,
+          [connection.id]: {
+            ...currentResult,
+            importedCount: currentResult.importedCount + 1,
+            unmatchedCount: Math.max(0, currentResult.unmatchedCount - 1),
+            unmatchedEvents: currentResult.unmatchedEvents.filter(
+              (item) => eventKey(item) !== eventKey(event)
+            ),
+            recognizedEvents: [
+              validatedEvent,
+              ...currentResult.recognizedEvents,
+            ].slice(0, 50),
+          },
+        };
+      });
+
+      setSuccess("Rendez-vous créé depuis l'événement Apple Calendar.");
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Impossible de créer le rendez-vous"
+      );
+    } finally {
+      setCreatingAppointmentKey(null);
     }
   };
 
@@ -575,38 +726,213 @@ export default function CalendarSettingsPage() {
                       </div>
                     </div>
                     {syncResult && (
-                      <div className="mt-4 grid gap-3 rounded-3xl border border-white/70 bg-white/45 p-4 backdrop-blur-xl sm:grid-cols-4">
-                        <div className="rounded-2xl border border-cyan-100/80 bg-cyan-50/70 px-4 py-3 text-cyan-800/75">
-                          <p className="text-xl font-bold tracking-[-0.04em]">
-                            {syncResult.importedCount}
-                          </p>
-                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
-                            Importés
-                          </p>
+                      <div className="mt-4 space-y-4">
+                        <div className="grid gap-3 rounded-3xl border border-white/70 bg-white/45 p-4 backdrop-blur-xl sm:grid-cols-4">
+                          <div className="rounded-2xl border border-cyan-100/80 bg-cyan-50/70 px-4 py-3 text-cyan-800/75">
+                            <p className="text-xl font-bold tracking-[-0.04em]">
+                              {syncResult.importedCount}
+                            </p>
+                            <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                              Importés
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-4 py-3 text-[#5f7f68]">
+                            <p className="text-xl font-bold tracking-[-0.04em]">
+                              {syncResult.updatedCount}
+                            </p>
+                            <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                              Mis à jour
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-[#eadfca]/80 bg-[#fff7e6]/80 px-4 py-3 text-[#7b6745]">
+                            <p className="text-xl font-bold tracking-[-0.04em]">
+                              {syncResult.unmatchedCount}
+                            </p>
+                            <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                              Non reconnus
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-[#f3ddd7]/80 bg-[#fff1ed]/80 px-4 py-3 text-[#9a6657]">
+                            <p className="text-xl font-bold tracking-[-0.04em]">
+                              {syncResult.skippedCount}
+                            </p>
+                            <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
+                              Ignorés
+                            </p>
+                          </div>
                         </div>
-                        <div className="rounded-2xl border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-4 py-3 text-[#5f7f68]">
-                          <p className="text-xl font-bold tracking-[-0.04em]">
-                            {syncResult.updatedCount}
-                          </p>
-                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
-                            Mis à jour
-                          </p>
+
+                        <div className="rounded-3xl border border-[#dbead7]/80 bg-[#f0f8ee]/55 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-sm font-bold tracking-[-0.02em] text-[#4f755b]">
+                              Événements reconnus
+                            </h3>
+                            <span className="rounded-full border border-[#dbead7]/80 bg-white/60 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#5f7f68]">
+                              Reconnu
+                            </span>
+                          </div>
+                          {!syncResult.recognizedEvents.length ? (
+                            <p className="mt-4 text-sm font-medium text-black/45">
+                              Aucun événement reconnu sur cette synchronisation.
+                            </p>
+                          ) : (
+                            <div className="mt-4 space-y-3">
+                              {syncResult.recognizedEvents.map((event) => (
+                                <div
+                                  key={`recognized-${eventKey(event)}`}
+                                  className="rounded-2xl border border-white/70 bg-white/55 p-4"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                      <p className="font-semibold tracking-[-0.02em]">
+                                        {event.summary || "Sans titre"}
+                                      </p>
+                                      <p className="mt-1 text-xs font-medium text-black/45">
+                                        {formatDate(event.startsAt)} -{" "}
+                                        {formatDate(event.endsAt)}
+                                      </p>
+                                      <p className="mt-2 text-xs font-semibold text-black/55">
+                                        Patient : {event.patientName || "Non renseigné"}
+                                      </p>
+                                      <p className="mt-2 text-xs font-medium leading-5 text-black/45">
+                                        {event.reason}
+                                      </p>
+                                    </div>
+                                    <span
+                                      className={cn(
+                                        "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                                        confidenceTone(event.confidence)
+                                      )}
+                                    >
+                                      {confidencePercent(event.confidence)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        <div className="rounded-2xl border border-[#eadfca]/80 bg-[#fff7e6]/80 px-4 py-3 text-[#7b6745]">
-                          <p className="text-xl font-bold tracking-[-0.04em]">
-                            {syncResult.unmatchedCount}
-                          </p>
-                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
-                            Non reconnus
-                          </p>
+
+                        <div className="rounded-3xl border border-[#eadfca]/80 bg-[#fff7e6]/60 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-sm font-bold tracking-[-0.02em] text-[#7b6745]">
+                              Validation nécessaire
+                            </h3>
+                            <span className="rounded-full border border-[#eadfca]/80 bg-white/60 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#7b6745]">
+                              Validation nécessaire
+                            </span>
+                          </div>
+                          {!syncResult.unmatchedEvents.length ? (
+                            <p className="mt-4 text-sm font-medium text-black/45">
+                              Aucun événement à valider.
+                            </p>
+                          ) : (
+                            <div className="mt-4 space-y-3">
+                              {syncResult.unmatchedEvents.map((event) => {
+                                const key = `${connection.id}:${eventKey(event)}`;
+
+                                return (
+                                  <div
+                                    key={`unmatched-${eventKey(event)}`}
+                                    className="rounded-2xl border border-white/70 bg-white/55 p-4"
+                                  >
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <p className="font-semibold tracking-[-0.02em]">
+                                          {event.summary || "Sans titre"}
+                                        </p>
+                                        <p className="mt-1 text-xs font-medium text-black/45">
+                                          {formatDate(event.startsAt)} -{" "}
+                                          {formatDate(event.endsAt)}
+                                        </p>
+                                        <p className="mt-2 text-xs font-medium leading-5 text-black/45">
+                                          {event.reason}
+                                        </p>
+                                      </div>
+                                      <span
+                                        className={cn(
+                                          "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                                          confidenceTone(event.confidence)
+                                        )}
+                                      >
+                                        {confidencePercent(event.confidence)}
+                                      </span>
+                                    </div>
+                                    <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]">
+                                      <select
+                                        value={selectedPatientByEvent[key] || ""}
+                                        onChange={(inputEvent) =>
+                                          setSelectedPatientByEvent((current) => ({
+                                            ...current,
+                                            [key]: inputEvent.target.value,
+                                          }))
+                                        }
+                                        className={INPUT}
+                                      >
+                                        <option value="">Choisir un patient</option>
+                                        {patients.map((patient) => (
+                                          <option key={patient.id} value={patient.id}>
+                                            {patientName(patient)}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleCreateAppointmentFromEvent(
+                                            connection,
+                                            event
+                                          )
+                                        }
+                                        disabled={creatingAppointmentKey === key}
+                                        className={BUTTON_DARK}
+                                      >
+                                        {creatingAppointmentKey === key
+                                          ? "Création..."
+                                          : "Créer rendez-vous"}
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
-                        <div className="rounded-2xl border border-[#f3ddd7]/80 bg-[#fff1ed]/80 px-4 py-3 text-[#9a6657]">
-                          <p className="text-xl font-bold tracking-[-0.04em]">
-                            {syncResult.skippedCount}
-                          </p>
-                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
-                            Ignorés
-                          </p>
+
+                        <div className="rounded-3xl border border-[#f3ddd7]/80 bg-[#fff1ed]/55 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-sm font-bold tracking-[-0.02em] text-[#9a6657]">
+                              Ignorés
+                            </h3>
+                            <span className="rounded-full border border-[#f3ddd7]/80 bg-white/60 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#9a6657]">
+                              Ignoré
+                            </span>
+                          </div>
+                          {!syncResult.skippedEvents.length ? (
+                            <p className="mt-4 text-sm font-medium text-black/45">
+                              Aucun événement ignoré.
+                            </p>
+                          ) : (
+                            <div className="mt-4 space-y-3">
+                              {syncResult.skippedEvents.map((event) => (
+                                <div
+                                  key={`skipped-${eventKey(event)}`}
+                                  className="rounded-2xl border border-white/70 bg-white/55 p-4"
+                                >
+                                  <p className="font-semibold tracking-[-0.02em]">
+                                    {event.summary || "Sans titre"}
+                                  </p>
+                                  <p className="mt-1 text-xs font-medium text-black/45">
+                                    {formatDate(event.startsAt)} -{" "}
+                                    {formatDate(event.endsAt)}
+                                  </p>
+                                  <p className="mt-2 text-xs font-medium leading-5 text-black/45">
+                                    {event.reason}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
