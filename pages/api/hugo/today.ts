@@ -19,17 +19,25 @@ const prescriptionSelect = {
   status: true,
 };
 
-const sessionSelect = {
+const appointmentSelect = {
   id: true,
-  sessionNumber: true,
-  scheduledAt: true,
-  completedAt: true,
+  startsAt: true,
+  endsAt: true,
   status: true,
+  source: true,
+  notes: true,
   patient: {
     select: patientSelect,
   },
-  prescription: {
-    select: prescriptionSelect,
+  session: {
+    select: {
+      id: true,
+      status: true,
+      sessionNumber: true,
+      prescription: {
+        select: prescriptionSelect,
+      },
+    },
   },
 };
 
@@ -91,6 +99,21 @@ const toBillingAction = (
   };
 };
 
+const serializeAppointment = <
+  T extends { session?: { id: string } | null }
+>(
+  appointment: T
+) => {
+  const { session, ...rest } = appointment;
+
+  return {
+    ...rest,
+    linkedSessionId: session?.id || null,
+    hasSession: Boolean(session?.id),
+    linkedSession: session || null,
+  };
+};
+
 const getToday = async (
   req: AuthenticatedNextApiRequest,
   res: NextApiResponse
@@ -108,32 +131,30 @@ const getToday = async (
   endOfToday.setDate(endOfToday.getDate() + 1);
 
   const [
-    todaySessions,
-    upcomingSessions,
+    todayAppointments,
+    upcomingAppointments,
     attentionRows,
     draftRows,
     readyRows,
   ] = await Promise.all([
-    prisma.therapySession.findMany({
+    prisma.appointment.findMany({
       where: {
         entityId: cabinet.cabinetId,
-        status: "PLANNED",
-        scheduledAt: {
+        startsAt: {
           gte: startOfToday,
           lt: endOfToday,
         },
       },
-      select: sessionSelect,
-      orderBy: { scheduledAt: "asc" },
+      select: appointmentSelect,
+      orderBy: { startsAt: "asc" },
     }),
-    prisma.therapySession.findMany({
+    prisma.appointment.findMany({
       where: {
         entityId: cabinet.cabinetId,
-        status: "PLANNED",
-        scheduledAt: { gte: now },
+        startsAt: { gte: now },
       },
-      select: sessionSelect,
-      orderBy: { scheduledAt: "asc" },
+      select: appointmentSelect,
+      orderBy: { startsAt: "asc" },
       take: 10,
     }),
     prisma.$queryRaw<PrescriptionIdRow[]>`
@@ -223,19 +244,30 @@ const getToday = async (
     ),
   ].slice(0, 15);
 
+  const serializedTodayAppointments = todayAppointments.map(
+    serializeAppointment
+  );
+  const serializedUpcomingAppointments = upcomingAppointments.map(
+    serializeAppointment
+  );
+  const sessionsAlreadyCreatedToday = serializedTodayAppointments.filter(
+    (appointment) => appointment.hasSession
+  ).length;
+  const appointmentsWithoutSessionToday =
+    serializedTodayAppointments.length - sessionsAlreadyCreatedToday;
+
   return jsonSuccess(res, {
     cabinet: {
       cabinetId: cabinet.cabinetId,
       name: cabinet.cabinetName,
     },
-    todaySessions,
-    upcomingSessions,
+    todayAppointments: serializedTodayAppointments,
+    upcomingAppointments: serializedUpcomingAppointments,
     billingActions,
     summary: {
-      patientsToday: new Set(
-        todaySessions.map((session) => session.patient.id)
-      ).size,
-      sessionsToday: todaySessions.length,
+      appointmentsToday: serializedTodayAppointments.length,
+      sessionsAlreadyCreatedToday,
+      appointmentsWithoutSessionToday,
       invoicesToPrepare: draftPrescriptions.length,
       invoicesReady: readyPrescriptions.length,
     },

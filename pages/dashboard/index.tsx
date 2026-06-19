@@ -3,6 +3,8 @@ import { useRouter } from "next/router";
 
 type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
 type TherapySessionStatus = "PLANNED" | "COMPLETED" | "CANCELLED" | "MISSED";
+type AppointmentStatus = "SCHEDULED" | "COMPLETED" | "CANCELLED" | "MISSED";
+type AppointmentSource = "MANUAL" | "APPLE_CALENDAR" | "DOCTENA";
 type BillingActionType = "ATTENTION" | "DRAFT" | "READY";
 
 interface Cabinet {
@@ -10,17 +12,10 @@ interface Cabinet {
   name: string;
 }
 
-interface TherapySession {
+interface LinkedSession {
   id: string;
   sessionNumber: number;
-  scheduledAt?: string | null;
-  completedAt?: string | null;
   status: TherapySessionStatus;
-  patient: {
-    id: string;
-    firstName: string;
-    lastName: string;
-  };
   prescription: {
     id: string;
     title: string;
@@ -28,6 +23,23 @@ interface TherapySession {
     completedSessions: number;
     status: PrescriptionStatus;
   } | null;
+}
+
+interface TodayAppointment {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  status: AppointmentStatus;
+  source: AppointmentSource;
+  notes?: string | null;
+  patient: {
+    id: string;
+    firstName: string;
+    lastName: string;
+  };
+  linkedSessionId: string | null;
+  hasSession: boolean;
+  linkedSession: LinkedSession | null;
 }
 
 interface BillingAction {
@@ -50,16 +62,17 @@ interface BillingAction {
 }
 
 interface TodaySummary {
-  patientsToday: number;
-  sessionsToday: number;
+  appointmentsToday: number;
+  sessionsAlreadyCreatedToday: number;
+  appointmentsWithoutSessionToday: number;
   invoicesToPrepare: number;
   invoicesReady: number;
 }
 
 interface TodayPayload {
   cabinet: Cabinet;
-  todaySessions: TherapySession[];
-  upcomingSessions: TherapySession[];
+  todayAppointments: TodayAppointment[];
+  upcomingAppointments: TodayAppointment[];
   billingActions: BillingAction[];
   summary: TodaySummary;
 }
@@ -382,9 +395,16 @@ export default function TodayDashboard() {
     }
   };
 
-  const handleCompleteSession = async (session: TherapySession) => {
+  const handleCompleteSession = async (appointment: TodayAppointment) => {
     if (!data?.cabinet.cabinetId) {
       setError("Cabinet introuvable.");
+      return;
+    }
+
+    const session = appointment.linkedSession;
+
+    if (!session) {
+      setError("Aucune séance liée à ce rendez-vous.");
       return;
     }
 
@@ -402,7 +422,7 @@ export default function TodayDashboard() {
         method: "PATCH",
         body: JSON.stringify({
           entityId: data.cabinet.cabinetId,
-          patientId: session.patient.id,
+          patientId: appointment.patient.id,
           prescriptionId: session.prescription.id,
           sessionNumber: session.sessionNumber,
           status: "COMPLETED",
@@ -410,7 +430,7 @@ export default function TodayDashboard() {
         }),
       });
       await loadToday();
-      setSuccess(`Séance réalisée pour ${patientName(session.patient)}.`);
+      setSuccess(`Séance réalisée pour ${patientName(appointment.patient)}.`);
     } catch (completeError) {
       setError(
         completeError instanceof Error
@@ -501,23 +521,32 @@ export default function TodayDashboard() {
 
             <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[560px]">
               <StatPill
-                label="Patients"
-                value={loading ? "..." : data?.summary.patientsToday ?? 0}
+                label="Rendez-vous"
+                value={loading ? "..." : data?.summary.appointmentsToday ?? 0}
                 tone="border-[#dcebd7]/80 bg-[#eef6ec]/80 text-[#4f755b]"
               />
               <StatPill
-                label="Séances"
-                value={loading ? "..." : data?.summary.sessionsToday ?? 0}
+                label="Séances créées"
+                value={
+                  loading ? "..." : data?.summary.sessionsAlreadyCreatedToday ?? 0
+                }
                 tone="border-cyan-100/80 bg-cyan-50/70 text-cyan-800/75"
               />
               <StatPill
-                label="À préparer"
-                value={loading ? "..." : data?.summary.invoicesToPrepare ?? 0}
+                label="À transformer"
+                value={
+                  loading ? "..." : data?.summary.appointmentsWithoutSessionToday ?? 0
+                }
                 tone="border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]"
               />
               <StatPill
-                label="À valider"
-                value={loading ? "..." : data?.summary.invoicesReady ?? 0}
+                label="Factures à traiter"
+                value={
+                  loading
+                    ? "..."
+                    : (data?.summary.invoicesToPrepare ?? 0) +
+                      (data?.summary.invoicesReady ?? 0)
+                }
                 tone="border-[#f3ddd7]/80 bg-[#fff1ed]/80 text-[#9a6657]"
               />
             </div>
@@ -574,7 +603,7 @@ export default function TodayDashboard() {
                   Agenda
                 </p>
                 <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
-                  Patients aujourd'hui
+                  Agenda du jour
                 </h2>
               </div>
               <Icon name="calendar" className="h-5 w-5 text-cyan-700/45" />
@@ -589,54 +618,88 @@ export default function TodayDashboard() {
                   />
                 ))}
               </div>
-            ) : !data?.todaySessions.length ? (
+            ) : !data?.todayAppointments.length ? (
               <div className="px-5 py-16 text-center">
                 <p className="text-lg font-semibold tracking-[-0.03em]">
-                  Aucun patient prévu aujourd'hui.
+                  Aucun rendez-vous prévu aujourd'hui.
                 </p>
                 <p className="mt-2 text-sm font-medium text-black/45">
-                  La journee est libre pour l'instant.
+                  L'agenda est libre pour l'instant.
                 </p>
               </div>
             ) : (
               <div className="divide-y divide-black/5">
-                {data.todaySessions.map((session) => (
+                {data.todayAppointments.map((appointment) => {
+                  const linkedSession = appointment.linkedSession;
+                  const canCompleteSession = Boolean(
+                    linkedSession && linkedSession.status !== "COMPLETED"
+                  );
+
+                  return (
                   <div
-                    key={session.id}
+                    key={appointment.id}
                     className="grid gap-4 px-5 py-5 transition hover:bg-white/45 sm:grid-cols-[90px_1fr_auto] sm:items-center"
                   >
                     <div className="rounded-2xl border border-cyan-100/80 bg-cyan-50/60 px-4 py-3 text-center text-lg font-bold tracking-[-0.04em] text-cyan-900/75">
-                      {formatTime(session.scheduledAt)}
+                      {formatTime(appointment.startsAt)}
                     </div>
                     <div>
                       <p className="text-lg font-semibold tracking-[-0.03em]">
-                        {patientName(session.patient)}
+                        {patientName(appointment.patient)}
                       </p>
-                      <p className="mt-1 text-sm font-medium text-black/45">
-                        {session.prescription?.title || "Prescription"} · séance{" "}
-                        {session.sessionNumber}
-                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
+                          {appointment.source}
+                        </span>
+                        <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
+                          {appointment.status}
+                        </span>
+                        <span
+                          className={cn(
+                            "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                            appointment.hasSession
+                              ? "border-[#dbead7]/80 bg-[#f0f8ee]/75 text-[#5f7f68]"
+                              : "border-[#eadfca]/70 bg-[#fff8ea]/75 text-[#7b6745]"
+                          )}
+                        >
+                          {appointment.hasSession
+                            ? "Séance créée"
+                            : "À transformer en séance"}
+                        </span>
+                      </div>
+                      {linkedSession && (
+                        <p className="mt-3 text-sm font-medium text-black/45">
+                          Séance n°{linkedSession.sessionNumber} ·{" "}
+                          {linkedSession.status}
+                          {linkedSession.prescription
+                            ? ` · ${linkedSession.prescription.title}`
+                            : ""}
+                        </p>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                      <span className="w-fit rounded-full border border-white/70 bg-white/65 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
-                        {session.status}
-                      </span>
-                      {session.status !== "COMPLETED" && (
+                      {!appointment.hasSession && (
+                        <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-2 text-xs font-semibold text-[#7b6745]">
+                          À transformer
+                        </span>
+                      )}
+                      {canCompleteSession && linkedSession && (
                         <button
                           type="button"
-                          onClick={() => handleCompleteSession(session)}
-                          disabled={completingSessionId === session.id}
+                          onClick={() => handleCompleteSession(appointment)}
+                          disabled={completingSessionId === linkedSession.id}
                           className="inline-flex items-center justify-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68] shadow-[0_10px_24px_rgba(79,117,91,0.055)] transition hover:-translate-y-px hover:bg-[#e6f3e2] disabled:cursor-not-allowed disabled:opacity-55"
                         >
                           <Icon name="check" className="h-3.5 w-3.5" />
-                          {completingSessionId === session.id
+                          {completingSessionId === linkedSession.id
                             ? "Validation..."
                             : "Marquer réalisée"}
                         </button>
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -736,15 +799,15 @@ export default function TodayDashboard() {
                 À venir
               </p>
               <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
-                Prochaines séances
+                Prochains rendez-vous
               </h2>
             </div>
             <button
               type="button"
-              onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
+              onClick={() => router.push("/dashboard/appointments")}
               className={BUTTON_LIGHT}
             >
-              Voir les séances
+              Voir les rendez-vous
             </button>
           </div>
 
@@ -757,29 +820,32 @@ export default function TodayDashboard() {
                 />
               ))}
             </div>
-          ) : !data?.upcomingSessions.length ? (
+          ) : !data?.upcomingAppointments.length ? (
             <p className="px-5 py-12 text-sm font-medium text-black/45">
-              Aucune séance à venir pour l'instant.
+              Aucun rendez-vous à venir pour l'instant.
             </p>
           ) : (
             <div className="grid gap-3 p-5 md:grid-cols-2">
-              {data.upcomingSessions.map((session) => (
+              {data.upcomingAppointments.map((appointment) => (
                 <div
-                  key={session.id}
+                  key={appointment.id}
                   className="rounded-3xl border border-white/70 bg-white/50 p-4 backdrop-blur-xl transition hover:bg-white/75"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="font-semibold tracking-[-0.02em]">
-                        {patientName(session.patient)}
+                        {patientName(appointment.patient)}
                       </p>
                       <p className="mt-1 text-xs font-medium text-black/45">
-                        {session.prescription?.title || "Prescription"} · séance{" "}
-                        {session.sessionNumber}
+                        {appointment.hasSession && appointment.linkedSession
+                          ? `Séance n°${appointment.linkedSession.sessionNumber}`
+                          : "À transformer en séance"}
+                        {" · "}
+                        {appointment.source}
                       </p>
                     </div>
                     <span className="rounded-full bg-cyan-50 px-3 py-1 text-[10px] font-semibold text-cyan-800/65">
-                      {formatSessionDate(session.scheduledAt)}
+                      {formatSessionDate(appointment.startsAt)}
                     </span>
                   </div>
                 </div>
