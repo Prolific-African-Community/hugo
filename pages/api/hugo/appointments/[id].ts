@@ -26,6 +26,25 @@ const appointmentInclude = {
       lastName: true,
     },
   },
+  session: {
+    select: {
+      id: true,
+    },
+  },
+};
+
+const serializeAppointment = <
+  T extends { session?: { id: string } | null }
+>(
+  appointment: T
+) => {
+  const { session, ...rest } = appointment;
+
+  return {
+    ...rest,
+    linkedSessionId: session?.id || null,
+    hasSession: Boolean(session?.id),
+  };
 };
 
 const getRequiredAppointmentId = (req: AuthenticatedNextApiRequest) => {
@@ -97,7 +116,7 @@ const getAppointment = async (
     return jsonError(res, 404, "Appointment not found");
   }
 
-  return jsonSuccess(res, appointment);
+  return jsonSuccess(res, serializeAppointment(appointment));
 };
 
 const updateAppointment = async (
@@ -186,7 +205,7 @@ const updateAppointment = async (
     include: appointmentInclude,
   });
 
-  return jsonSuccess(res, appointment);
+  return jsonSuccess(res, serializeAppointment(appointment));
 };
 
 const deleteAppointment = async (

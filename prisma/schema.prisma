@@ -683,6 +683,8 @@ model TherapySession {
   patient        Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
   prescriptionId String?
   prescription   Prescription?        @relation(fields: [prescriptionId], references: [id], onDelete: SetNull)
+  appointmentId  String?              @unique
+  appointment    Appointment?         @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   sessionNumber  Int
   scheduledAt    DateTime?
   completedAt    DateTime?
@@ -697,6 +699,7 @@ model TherapySession {
   @@index([entityId, scheduledAt])
   @@index([patientId])
   @@index([prescriptionId])
+  @@index([appointmentId])
   @@index([scheduledAt])
   @@index([status])
 }
@@ -714,6 +717,7 @@ model Appointment {
   notes     String?
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
+  session   TherapySession?
 
   @@index([entityId])
   @@index([entityId, startsAt])

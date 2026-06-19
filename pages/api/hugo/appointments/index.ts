@@ -27,6 +27,25 @@ const appointmentInclude = {
       lastName: true,
     },
   },
+  session: {
+    select: {
+      id: true,
+    },
+  },
+};
+
+const serializeAppointment = <
+  T extends { session?: { id: string } | null }
+>(
+  appointment: T
+) => {
+  const { session, ...rest } = appointment;
+
+  return {
+    ...rest,
+    linkedSessionId: session?.id || null,
+    hasSession: Boolean(session?.id),
+  };
 };
 
 const parseAppointmentStatus = (value: unknown): AppointmentStatus | null => {
@@ -122,7 +141,7 @@ const listAppointments = async (
     take: 100,
   });
 
-  return jsonSuccess(res, appointments);
+  return jsonSuccess(res, appointments.map(serializeAppointment));
 };
 
 const createAppointment = async (
@@ -188,7 +207,7 @@ const createAppointment = async (
     include: appointmentInclude,
   });
 
-  return jsonSuccess(res, appointment, 201);
+  return jsonSuccess(res, serializeAppointment(appointment), 201);
 };
 
 export default withAuth(

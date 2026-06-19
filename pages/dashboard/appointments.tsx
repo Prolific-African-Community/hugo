@@ -24,7 +24,18 @@ interface Appointment {
   status: AppointmentStatus;
   source: AppointmentSource;
   notes?: string | null;
+  linkedSessionId?: string | null;
+  hasSession?: boolean;
   patient: Patient;
+}
+
+interface Prescription {
+  id: string;
+  patientId: string;
+  title: string;
+  prescribedSessions: number;
+  completedSessions: number;
+  status: "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
 }
 
 interface ApiResponse<T> {
@@ -223,6 +234,7 @@ export default function AppointmentsDashboardPage() {
   const router = useRouter();
   const [cabinet, setCabinet] = useState<Cabinet | null>(null);
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [filter, setFilter] = useState<FilterMode>("today");
   const [form, setForm] = useState<AppointmentForm>(emptyForm());
@@ -231,6 +243,10 @@ export default function AppointmentsDashboardPage() {
   );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [creatingSessionAppointmentId, setCreatingSessionAppointmentId] =
+    useState<string | null>(null);
+  const [selectedPrescriptionByAppointment, setSelectedPrescriptionByAppointment] =
+    useState<Record<string, string>>({});
   const [deletingAppointmentId, setDeletingAppointmentId] = useState<string | null>(
     null
   );
@@ -283,9 +299,14 @@ export default function AppointmentsDashboardPage() {
       const cabinetData = await request<Cabinet>("/api/hugo/cabinet");
       setCabinet(cabinetData);
 
-      const [patientData, appointmentData] = await Promise.all([
+      const [patientData, prescriptionData, appointmentData] = await Promise.all([
         request<Patient[]>(
           `/api/hugo/patients?entityId=${encodeURIComponent(
+            cabinetData.cabinetId
+          )}`
+        ),
+        request<Prescription[]>(
+          `/api/hugo/prescriptions?entityId=${encodeURIComponent(
             cabinetData.cabinetId
           )}`
         ),
@@ -293,6 +314,7 @@ export default function AppointmentsDashboardPage() {
       ]);
 
       setPatients(patientData);
+      setPrescriptions(prescriptionData);
       setAppointments(appointmentData);
     } catch (loadError) {
       setError(
@@ -395,6 +417,49 @@ export default function AppointmentsDashboardPage() {
       );
     } finally {
       setDeletingAppointmentId(null);
+    }
+  };
+
+  const activePrescriptionsForPatient = (patientId: string) => {
+    return prescriptions.filter(
+      (prescription) =>
+        prescription.patientId === patientId && prescription.status === "ACTIVE"
+    );
+  };
+
+  const handleCreateSession = async (appointment: Appointment) => {
+    const patientPrescriptions = activePrescriptionsForPatient(
+      appointment.patientId
+    );
+    const prescriptionId =
+      selectedPrescriptionByAppointment[appointment.id] ||
+      patientPrescriptions[0]?.id;
+
+    if (!prescriptionId) {
+      setError("Aucune prescription active");
+      setSuccess(null);
+      return;
+    }
+
+    setCreatingSessionAppointmentId(appointment.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await request(`/api/hugo/appointments/${appointment.id}/create-session`, {
+        method: "POST",
+        body: JSON.stringify({ prescriptionId }),
+      });
+      await loadAppointments();
+      setSuccess(`Séance créée pour ${patientName(appointment.patient)}.`);
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Impossible de créer la séance"
+      );
+    } finally {
+      setCreatingSessionAppointmentId(null);
     }
   };
 
@@ -694,63 +759,133 @@ export default function AppointmentsDashboardPage() {
               </div>
             ) : (
               <div className="divide-y divide-black/5">
-                {appointments.map((appointment) => (
-                  <div
-                    key={appointment.id}
-                    className="grid gap-4 px-5 py-5 transition hover:bg-white/45 lg:grid-cols-[110px_1fr_auto]"
-                  >
-                    <div className="rounded-2xl border border-cyan-100/80 bg-cyan-50/60 px-4 py-3 text-center">
-                      <p className="text-sm font-bold tracking-[-0.03em] text-cyan-900/75">
-                        {formatTime(appointment.startsAt)}
-                      </p>
-                      <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-900/40">
-                        {formatDate(appointment.startsAt)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-lg font-semibold tracking-[-0.03em]">
-                        {patientName(appointment.patient)}
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
-                          {appointment.status}
-                        </span>
-                        <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#7b6745]">
-                          Source {appointment.source}
-                        </span>
-                      </div>
-                      {appointment.notes && (
-                        <p className="mt-3 text-sm font-medium leading-6 text-black/50">
-                          {appointment.notes}
+                {appointments.map((appointment) => {
+                  const patientPrescriptions = activePrescriptionsForPatient(
+                    appointment.patientId
+                  );
+                  const selectedPrescriptionId =
+                    selectedPrescriptionByAppointment[appointment.id] ||
+                    patientPrescriptions[0]?.id ||
+                    "";
+                  const isSessionLinked = Boolean(appointment.linkedSessionId);
+
+                  return (
+                    <div
+                      key={appointment.id}
+                      className="grid gap-4 px-5 py-5 transition hover:bg-white/45 lg:grid-cols-[110px_1fr_auto]"
+                    >
+                      <div className="rounded-2xl border border-cyan-100/80 bg-cyan-50/60 px-4 py-3 text-center">
+                        <p className="text-sm font-bold tracking-[-0.03em] text-cyan-900/75">
+                          {formatTime(appointment.startsAt)}
                         </p>
-                      )}
+                        <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-900/40">
+                          {formatDate(appointment.startsAt)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-lg font-semibold tracking-[-0.03em]">
+                          {patientName(appointment.patient)}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
+                            {appointment.status}
+                          </span>
+                          <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#7b6745]">
+                            Source {appointment.source}
+                          </span>
+                        </div>
+                        {appointment.notes && (
+                          <p className="mt-3 text-sm font-medium leading-6 text-black/50">
+                            {appointment.notes}
+                          </p>
+                        )}
+                        <div className="mt-4 grid gap-2 rounded-2xl border border-white/70 bg-white/45 p-3 backdrop-blur-xl sm:grid-cols-[1fr_auto]">
+                          {isSessionLinked ? (
+                            <p className="rounded-2xl border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-4 py-2.5 text-xs font-semibold text-[#5f7f68]">
+                              Séance créée
+                            </p>
+                          ) : patientPrescriptions.length ? (
+                            <select
+                              value={selectedPrescriptionId}
+                              onChange={(event) =>
+                                setSelectedPrescriptionByAppointment(
+                                  (current) => ({
+                                    ...current,
+                                    [appointment.id]: event.target.value,
+                                  })
+                                )
+                              }
+                              className={cn(INPUT, "py-2.5 text-xs")}
+                            >
+                              {patientPrescriptions.map((prescription) => {
+                                const remaining =
+                                  prescription.prescribedSessions -
+                                  prescription.completedSessions;
+
+                                return (
+                                  <option
+                                    key={prescription.id}
+                                    value={prescription.id}
+                                  >
+                                    {prescription.title} - {remaining} restante
+                                    {remaining > 1 ? "s" : ""}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          ) : (
+                            <p className="rounded-2xl bg-[#fff8ea]/75 px-4 py-2.5 text-xs font-semibold text-[#7b6745]">
+                              Aucune prescription active
+                            </p>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleCreateSession(appointment)}
+                            disabled={
+                              isSessionLinked ||
+                              creatingSessionAppointmentId === appointment.id ||
+                              !patientPrescriptions.length
+                            }
+                            className={cn(
+                              isSessionLinked ? BUTTON_LIGHT : BUTTON_DARK,
+                              "px-3 py-2.5 disabled:cursor-not-allowed disabled:opacity-55"
+                            )}
+                          >
+                            {isSessionLinked
+                              ? "Séance créée"
+                              : creatingSessionAppointmentId === appointment.id
+                              ? "Création..."
+                              : "Créer séance"}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-start gap-2 lg:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingAppointmentId(appointment.id);
+                            setForm(formFromAppointment(appointment));
+                            setError(null);
+                            setSuccess(null);
+                          }}
+                          className={BUTTON_LIGHT}
+                        >
+                          Modifier
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(appointment)}
+                          disabled={deletingAppointmentId === appointment.id}
+                          className={BUTTON_LIGHT}
+                        >
+                          {deletingAppointmentId === appointment.id
+                            ? "Suppression..."
+                            : "Supprimer"}
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap items-start gap-2 lg:justify-end">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingAppointmentId(appointment.id);
-                          setForm(formFromAppointment(appointment));
-                          setError(null);
-                          setSuccess(null);
-                        }}
-                        className={BUTTON_LIGHT}
-                      >
-                        Modifier
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(appointment)}
-                        disabled={deletingAppointmentId === appointment.id}
-                        className={BUTTON_LIGHT}
-                      >
-                        {deletingAppointmentId === appointment.id
-                          ? "Suppression..."
-                          : "Supprimer"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
