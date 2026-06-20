@@ -1,4 +1,11 @@
-import { AppointmentSource, AppointmentStatus } from "@prisma/client";
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  CalendarEventSyncStatus,
+  CalendarProvider,
+  CalendarSyncActionStatus,
+  CalendarSyncActionType,
+} from "@prisma/client";
 import type { NextApiResponse } from "next";
 import {
   getOptionalString,
@@ -7,6 +14,10 @@ import {
   jsonSuccess,
 } from "../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
+import {
+  APPOINTMENT_OVERLAP_MESSAGE,
+  findAppointmentOverlap,
+} from "../../../../lib/hugo-appointments";
 import { requireHugoCabinet } from "../../../../lib/hugo-auth";
 import { prisma } from "../../../../lib/prisma";
 
@@ -17,6 +28,8 @@ interface AppointmentBody {
   status?: unknown;
   source?: unknown;
   notes?: unknown;
+  calendarConnectionId?: unknown;
+  externalEventId?: unknown;
 }
 
 const appointmentInclude = {
@@ -160,6 +173,8 @@ const createAppointment = async (
   const endsAt = parseRequiredDate(body.endsAt);
   const status = parseAppointmentStatus(body.status);
   const source = parseAppointmentSource(body.source);
+  const calendarConnectionId = getOptionalString(body.calendarConnectionId);
+  const externalEventId = getOptionalString(body.externalEventId);
 
   if (!patientId) {
     return jsonError(res, 400, "patientId is required");
@@ -194,17 +209,97 @@ const createAppointment = async (
     return jsonError(res, 404, "Patient not found");
   }
 
-  const appointment = await prisma.appointment.create({
-    data: {
-      entityId: cabinet.cabinetId,
-      patientId,
+  if (source === AppointmentSource.MANUAL) {
+    const overlap = await findAppointmentOverlap({
+      cabinetId: cabinet.cabinetId,
       startsAt,
       endsAt,
-      status,
-      source,
-      notes: getNullableString(body.notes),
-    },
-    include: appointmentInclude,
+    });
+
+    if (overlap) {
+      return jsonError(res, 409, APPOINTMENT_OVERLAP_MESSAGE);
+    }
+  }
+
+  if ((calendarConnectionId && !externalEventId) || (!calendarConnectionId && externalEventId)) {
+    return jsonError(
+      res,
+      400,
+      "calendarConnectionId and externalEventId must be provided together"
+    );
+  }
+
+  const calendarConnection = calendarConnectionId
+    ? await prisma.calendarConnection.findFirst({
+        where: {
+          id: calendarConnectionId,
+          entityId: cabinet.cabinetId,
+        },
+        select: { id: true, provider: true },
+      })
+    : null;
+
+  if (calendarConnectionId && !calendarConnection) {
+    return jsonError(res, 404, "Calendar connection not found");
+  }
+
+  const appointment = await prisma.$transaction(async (tx) => {
+    const createdAppointment = await tx.appointment.create({
+      data: {
+        entityId: cabinet.cabinetId,
+        patientId,
+        startsAt,
+        endsAt,
+        status,
+        source,
+        notes: getNullableString(body.notes),
+      },
+      include: appointmentInclude,
+    });
+
+    if (calendarConnection && externalEventId) {
+      await tx.calendarEventMapping.create({
+        data: {
+          entityId: cabinet.cabinetId,
+          appointmentId: createdAppointment.id,
+          calendarConnectionId: calendarConnection.id,
+          provider: calendarConnection.provider,
+          externalEventId,
+          lastPulledAt: new Date(),
+          syncStatus: CalendarEventSyncStatus.SYNCED,
+        },
+      });
+    } else if (source === AppointmentSource.MANUAL) {
+      const activeConnection = await tx.calendarConnection.findFirst({
+        where: {
+          entityId: cabinet.cabinetId,
+          provider: CalendarProvider.APPLE_CALENDAR,
+          status: "CONNECTED",
+        },
+        select: { id: true, provider: true },
+      });
+
+      if (activeConnection) {
+        await tx.calendarSyncAction.create({
+          data: {
+            entityId: cabinet.cabinetId,
+            appointmentId: createdAppointment.id,
+            calendarConnectionId: activeConnection.id,
+            provider: activeConnection.provider,
+            actionType: CalendarSyncActionType.CREATE_EVENT,
+            status: CalendarSyncActionStatus.PENDING,
+            payload: {
+              startsAt: startsAt.toISOString(),
+              endsAt: endsAt.toISOString(),
+              patientId,
+              notes: getNullableString(body.notes),
+            },
+          },
+        });
+      }
+    }
+
+    return createdAppointment;
   });
 
   return jsonSuccess(res, serializeAppointment(appointment), 201);

@@ -184,6 +184,28 @@ enum CalendarConnectionStatus {
   ERROR
 }
 
+enum CalendarEventSyncStatus {
+  SYNCED
+  LOCAL_PENDING
+  REMOTE_PENDING
+  CONFLICT
+  ERROR
+}
+
+enum CalendarSyncActionType {
+  CREATE_EVENT
+  UPDATE_EVENT
+  DELETE_EVENT
+}
+
+enum CalendarSyncActionStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+  CANCELLED
+}
+
 enum InvoiceStatus {
   DRAFT
   READY
@@ -260,25 +282,25 @@ model OrganizationUser {
 }
 
 model Entity {
-  id                      String                @id @default(cuid())
+  id                      String                 @id @default(cuid())
   organizationId          String
-  organization            Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization            Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name                    String
   legalName               String?
-  type                    EntityType            @default(COMPANY)
-  country                 String                @default("LU")
-  baseCurrency            String                @default("EUR")
-  accountingStandard      AccountingStandard    @default(LUX_GAAP)
+  type                    EntityType             @default(COMPANY)
+  country                 String                 @default("LU")
+  baseCurrency            String                 @default("EUR")
+  accountingStandard      AccountingStandard     @default(LUX_GAAP)
   accountingTemplateId    String?
-  accountingTemplate      AccountingTemplate?   @relation(fields: [accountingTemplateId], references: [id], onDelete: SetNull)
+  accountingTemplate      AccountingTemplate?    @relation(fields: [accountingTemplateId], references: [id], onDelete: SetNull)
   accountingInitializedAt DateTime?
-  fiscalYearStartMonth    Int                   @default(1)
-  fiscalYearStartDay      Int                   @default(1)
-  fiscalYearEndMonth      Int                   @default(12)
-  fiscalYearEndDay        Int                   @default(31)
-  isActive                Boolean               @default(true)
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
+  fiscalYearStartMonth    Int                    @default(1)
+  fiscalYearStartDay      Int                    @default(1)
+  fiscalYearEndMonth      Int                    @default(12)
+  fiscalYearEndDay        Int                    @default(31)
+  isActive                Boolean                @default(true)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
   users                   EntityUser[]
   projects                Project[]
   accounts                ChartOfAccount[]
@@ -295,6 +317,8 @@ model Entity {
   therapySessions         TherapySession[]
   appointments            Appointment[]
   calendarConnections     CalendarConnection[]
+  calendarEventMappings   CalendarEventMapping[]
+  calendarSyncActions     CalendarSyncAction[]
   invoices                Invoice[]
   tasks                   Task[]
   patientDocuments        PatientDocument[]
@@ -716,19 +740,21 @@ model TherapySession {
 }
 
 model Appointment {
-  entityId  String
-  entity    Entity            @relation(fields: [entityId], references: [id], onDelete: Cascade)
-  id        String            @id @default(cuid())
-  patientId String
-  patient   Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  startsAt  DateTime
-  endsAt    DateTime
-  status    AppointmentStatus @default(SCHEDULED)
-  source    AppointmentSource @default(MANUAL)
-  notes     String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  session   TherapySession?
+  entityId             String
+  entity               Entity                @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  id                   String                @id @default(cuid())
+  patientId            String
+  patient              Patient               @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  startsAt             DateTime
+  endsAt               DateTime
+  status               AppointmentStatus     @default(SCHEDULED)
+  source               AppointmentSource     @default(MANUAL)
+  notes                String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  session              TherapySession?
+  calendarEventMapping CalendarEventMapping?
+  calendarSyncActions  CalendarSyncAction[]
 
   @@index([entityId])
   @@index([entityId, startsAt])
@@ -740,21 +766,78 @@ model Appointment {
 }
 
 model CalendarConnection {
-  id           String                   @id @default(cuid())
-  entityId     String
-  entity       Entity                   @relation(fields: [entityId], references: [id], onDelete: Cascade)
-  provider     CalendarProvider         @default(APPLE_CALENDAR)
-  name         String
-  calendarUrl  String
-  status       CalendarConnectionStatus @default(CONNECTED)
-  lastSyncedAt DateTime?
-  lastError    String?
-  createdAt    DateTime                 @default(now())
-  updatedAt    DateTime                 @updatedAt
+  id            String                   @id @default(cuid())
+  entityId      String
+  entity        Entity                   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  provider      CalendarProvider         @default(APPLE_CALENDAR)
+  name          String
+  calendarUrl   String
+  status        CalendarConnectionStatus @default(CONNECTED)
+  lastSyncedAt  DateTime?
+  lastError     String?
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  eventMappings CalendarEventMapping[]
+  syncActions   CalendarSyncAction[]
 
   @@index([entityId])
   @@index([entityId, provider])
   @@index([entityId, status])
+}
+
+model CalendarEventMapping {
+  id                   String                  @id @default(cuid())
+  entityId             String
+  entity               Entity                  @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  appointmentId        String                  @unique
+  appointment          Appointment             @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  calendarConnectionId String
+  calendarConnection   CalendarConnection      @relation(fields: [calendarConnectionId], references: [id], onDelete: Cascade)
+  provider             CalendarProvider
+  externalEventId      String
+  externalCalendarId   String?
+  externalEtag         String?
+  externalLastModified DateTime?
+  lastPulledAt         DateTime?
+  lastPushedAt         DateTime?
+  syncStatus           CalendarEventSyncStatus @default(SYNCED)
+  lastSyncError        String?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  syncActions          CalendarSyncAction[]
+
+  @@unique([calendarConnectionId, externalEventId])
+  @@index([entityId])
+  @@index([entityId, syncStatus])
+  @@index([calendarConnectionId])
+  @@index([externalEventId])
+}
+
+model CalendarSyncAction {
+  id                   String                   @id @default(cuid())
+  entityId             String
+  entity               Entity                   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  appointmentId        String?
+  appointment          Appointment?             @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  calendarConnectionId String?
+  calendarConnection   CalendarConnection?      @relation(fields: [calendarConnectionId], references: [id], onDelete: SetNull)
+  mappingId            String?
+  mapping              CalendarEventMapping?    @relation(fields: [mappingId], references: [id], onDelete: SetNull)
+  provider             CalendarProvider
+  actionType           CalendarSyncActionType
+  status               CalendarSyncActionStatus @default(PENDING)
+  payload              Json?
+  error                String?
+  createdAt            DateTime                 @default(now())
+  processedAt          DateTime?
+
+  @@index([entityId])
+  @@index([entityId, status])
+  @@index([appointmentId])
+  @@index([calendarConnectionId])
+  @@index([mappingId])
+  @@index([provider, status])
+  @@index([createdAt])
 }
 
 model Invoice {

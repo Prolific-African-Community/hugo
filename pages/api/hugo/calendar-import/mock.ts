@@ -68,18 +68,15 @@ const serializeAppointment = <
 };
 
 const buildImportedNotes = ({
-  externalId,
   title,
   notes,
   unmatched,
 }: {
-  externalId: string;
   title: string;
   notes: string | null;
   unmatched?: boolean;
 }) => {
   const parts = [
-    `[Apple Calendar mock:${externalId}]`,
     `Titre: ${title}`,
     unmatched ? "Patient à identifier" : null,
     notes,
@@ -140,7 +137,6 @@ const importCalendarEvents = async (
         ? patients.find((item) => item.id === match.patientId) || null
         : null;
     const importedNotes = buildImportedNotes({
-      externalId,
       title,
       notes,
       unmatched: !patient,
@@ -153,7 +149,7 @@ const importCalendarEvents = async (
         startsAt,
         endsAt,
         notes: {
-          contains: `[Apple Calendar mock:${externalId}]`,
+          contains: `Titre: ${title}`,
         },
       },
       include: appointmentInclude,

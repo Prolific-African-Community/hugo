@@ -1,4 +1,10 @@
-import { AppointmentSource, AppointmentStatus } from "@prisma/client";
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  CalendarEventSyncStatus,
+  CalendarSyncActionStatus,
+  CalendarSyncActionType,
+} from "@prisma/client";
 import type { NextApiResponse } from "next";
 import {
   getOptionalString,
@@ -164,6 +170,13 @@ const updateAppointment = async (
       patientId: true,
       startsAt: true,
       endsAt: true,
+      calendarEventMapping: {
+        select: {
+          id: true,
+          calendarConnectionId: true,
+          provider: true,
+        },
+      },
     },
   });
 
@@ -190,19 +203,52 @@ const updateAppointment = async (
     }
   }
 
-  const appointment = await prisma.appointment.update({
-    where: { id },
-    data: {
-      ...(patientId ? { patientId: nextPatientId } : {}),
-      ...(startsAt !== undefined ? { startsAt: nextStartsAt } : {}),
-      ...(endsAt !== undefined ? { endsAt: nextEndsAt } : {}),
-      ...(status !== undefined ? { status } : {}),
-      ...(source !== undefined ? { source } : {}),
-      ...(getNullableString(body.notes) !== undefined
-        ? { notes: getNullableString(body.notes) }
-        : {}),
-    },
-    include: appointmentInclude,
+  const nextNotes = getNullableString(body.notes);
+
+  const appointment = await prisma.$transaction(async (tx) => {
+    const updatedAppointment = await tx.appointment.update({
+      where: { id },
+      data: {
+        ...(patientId ? { patientId: nextPatientId } : {}),
+        ...(startsAt !== undefined ? { startsAt: nextStartsAt } : {}),
+        ...(endsAt !== undefined ? { endsAt: nextEndsAt } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(source !== undefined ? { source } : {}),
+        ...(nextNotes !== undefined ? { notes: nextNotes } : {}),
+      },
+      include: appointmentInclude,
+    });
+
+    if (existingAppointment.calendarEventMapping) {
+      await tx.calendarEventMapping.update({
+        where: { id: existingAppointment.calendarEventMapping.id },
+        data: {
+          syncStatus: CalendarEventSyncStatus.LOCAL_PENDING,
+          lastSyncError: null,
+        },
+      });
+
+      await tx.calendarSyncAction.create({
+        data: {
+          entityId: cabinet.cabinetId,
+          appointmentId: existingAppointment.id,
+          calendarConnectionId:
+            existingAppointment.calendarEventMapping.calendarConnectionId,
+          mappingId: existingAppointment.calendarEventMapping.id,
+          provider: existingAppointment.calendarEventMapping.provider,
+          actionType: CalendarSyncActionType.UPDATE_EVENT,
+          status: CalendarSyncActionStatus.PENDING,
+          payload: {
+            startsAt: nextStartsAt.toISOString(),
+            endsAt: nextEndsAt.toISOString(),
+            patientId: nextPatientId,
+            notes: nextNotes,
+          },
+        },
+      });
+    }
+
+    return updatedAppointment;
   });
 
   return jsonSuccess(res, serializeAppointment(appointment));

@@ -487,12 +487,17 @@ export default function CalendarSettingsPage() {
             status: "SCHEDULED",
             source: "APPLE_CALENDAR",
             notes: [
-              event.uid ? `[Apple Calendar UID:${event.uid}]` : null,
               `Titre: ${event.summary || "Sans titre"}`,
               "Validation manuelle depuis Connexion agenda",
             ]
               .filter(Boolean)
               .join("\n"),
+            ...(event.uid
+              ? {
+                  calendarConnectionId: connection.id,
+                  externalEventId: event.uid,
+                }
+              : {}),
           }),
         }
       );
@@ -620,13 +625,18 @@ export default function CalendarSettingsPage() {
             status: "SCHEDULED",
             source: "APPLE_CALENDAR",
             notes: [
-              event.uid ? `[Apple Calendar UID:${event.uid}]` : null,
               `Titre: ${event.summary || "Sans titre"}`,
               "Validation manuelle depuis Connexion agenda",
               "Patient créé depuis l'événement Apple Calendar",
             ]
               .filter(Boolean)
               .join("\n"),
+            ...(event.uid
+              ? {
+                  calendarConnectionId: connection.id,
+                  externalEventId: event.uid,
+                }
+              : {}),
           }),
         }
       );
@@ -824,6 +834,10 @@ export default function CalendarSettingsPage() {
                 <Icon name="link" className="h-3.5 w-3.5" />
                 {saving ? "Enregistrement..." : "Connecter Apple Calendar"}
               </button>
+              <p className="rounded-2xl border border-cyan-100/80 bg-cyan-50/55 px-4 py-3 text-xs font-semibold leading-5 text-cyan-900/60">
+                Lecture Apple Calendar active. Écriture vers Apple Calendar à
+                connecter dans une prochaine étape.
+              </p>
             </div>
           </form>
 
