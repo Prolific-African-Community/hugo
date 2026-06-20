@@ -10,10 +10,18 @@ import {
   createCalDavEvent,
   decryptCalDavPassword,
 } from "../../../../../lib/apple-caldav";
-import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
+import { jsonSuccess } from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
 import { requireHugoCabinet } from "../../../../../lib/hugo-auth";
 import { prisma } from "../../../../../lib/prisma";
+
+const readableError = (
+  res: NextApiResponse,
+  status: number,
+  message: string
+) => {
+  return res.status(status).json({ success: false, message, error: message });
+};
 
 const getRequiredActionId = (req: AuthenticatedNextApiRequest) => {
   return typeof req.query.id === "string" && req.query.id.trim()
@@ -59,11 +67,11 @@ const pushCalendarSyncAction = async (
   const cabinet = await requireHugoCabinet(req);
 
   if (!id) {
-    return jsonError(res, 400, "Calendar sync action id is required");
+    return readableError(res, 400, "Calendar sync action id is required");
   }
 
   if (!cabinet) {
-    return jsonError(res, 404, "Cabinet not found");
+    return readableError(res, 404, "Cabinet not found");
   }
 
   const action = await prisma.calendarSyncAction.findFirst({
@@ -86,22 +94,26 @@ const pushCalendarSyncAction = async (
   });
 
   if (!action) {
-    return jsonError(res, 404, "Calendar sync action not found");
+    return readableError(res, 404, "Calendar sync action not found");
   }
 
   if (
     action.status !== CalendarSyncActionStatus.PENDING &&
     action.status !== CalendarSyncActionStatus.FAILED
   ) {
-    return jsonError(res, 400, "Action must be PENDING or FAILED");
+    return readableError(res, 400, "Action must be PENDING or FAILED");
   }
 
   if (action.actionType !== CalendarSyncActionType.CREATE_EVENT) {
-    return jsonError(res, 400, "Action non supportée dans ce run.");
+    return readableError(res, 400, "Action non supportée dans ce run.");
   }
 
   if (!action.appointment) {
-    return jsonError(res, 400, "Appointment linked to this action is missing");
+    return readableError(res, 400, "Appointment linked to this action is missing");
+  }
+
+  if (!action.appointment.startsAt || !action.appointment.endsAt) {
+    return readableError(res, 400, "Dates de rendez-vous manquantes.");
   }
 
   const connection =
@@ -117,22 +129,30 @@ const pushCalendarSyncAction = async (
     }));
 
   if (!connection) {
-    return jsonError(res, 400, "Aucune connexion Apple Calendar prête.");
+    return readableError(res, 400, "Aucune connexion Apple Calendar prête.");
   }
 
   if (
     connection.writeStatus !== CalendarWriteStatus.READY ||
     !connection.writeEnabled
   ) {
-    return jsonError(res, 400, "La connexion Apple Calendar n'est pas prête.");
+    return readableError(
+      res,
+      400,
+      "L’écriture Apple Calendar n’est pas prête. Testez d’abord la connexion CalDAV."
+    );
   }
 
-  if (
-    !connection.selectedCalendarUrl ||
-    !connection.caldavUsername ||
-    !connection.caldavPasswordEncrypted
-  ) {
-    return jsonError(res, 400, "Configuration CalDAV incomplète.");
+  if (!connection.caldavUsername || !connection.caldavPasswordEncrypted) {
+    return readableError(res, 400, "Configuration CalDAV incomplète.");
+  }
+
+  if (!connection.selectedCalendarUrl) {
+    return readableError(
+      res,
+      400,
+      "Aucun calendrier cible Apple Calendar sélectionné. Sélectionnez un calendrier cible avant de pousser l’événement."
+    );
   }
 
   await prisma.calendarSyncAction.update({
@@ -239,7 +259,7 @@ const pushCalendarSyncAction = async (
       }
     });
 
-    return jsonError(res, 502, message);
+    return readableError(res, 502, message);
   }
 };
 
@@ -250,10 +270,10 @@ export default withAuth(
         return await pushCalendarSyncAction(req, res);
       }
 
-      return jsonError(res, 405, "Method not allowed");
+      return readableError(res, 405, "Method not allowed");
     } catch (error) {
       console.error("HUGO CALENDAR ACTION PUSH ERROR:", error);
-      return jsonError(res, 500, "Internal server error");
+      return readableError(res, 500, "Internal server error");
     }
   }
 );
