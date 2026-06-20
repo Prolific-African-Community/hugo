@@ -1,5 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
+import {
+  cleanCalendarNotes,
+  preserveCalendarTechnicalNotes,
+} from "../../lib/hugo-display";
 
 type AppointmentStatus = "SCHEDULED" | "COMPLETED" | "CANCELLED" | "MISSED";
 type AppointmentSource = "MANUAL" | "APPLE_CALENDAR" | "DOCTENA";
@@ -51,6 +55,20 @@ interface AppointmentForm {
   status: AppointmentStatus;
   source: AppointmentSource;
   notes: string;
+}
+
+interface AvailabilitySuggestion {
+  startsAt: string;
+  endsAt: string;
+  label: string;
+  dayLabel: string;
+  isToday: boolean;
+  score: number;
+}
+
+interface RescheduleResult {
+  appointment: Appointment;
+  linkedSessionUpdated: boolean;
 }
 
 type ClassValue = string | false | null | undefined;
@@ -226,7 +244,7 @@ function formFromAppointment(appointment: Appointment): AppointmentForm {
     endsAt: toDateTimeInput(appointment.endsAt),
     status: appointment.status,
     source: appointment.source,
-    notes: appointment.notes || "",
+    notes: cleanCalendarNotes(appointment.notes),
   };
 }
 
@@ -243,6 +261,21 @@ export default function AppointmentsDashboardPage() {
   );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [availabilitySuggestions, setAvailabilitySuggestions] = useState<
+    AvailabilitySuggestion[]
+  >([]);
+  const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<
+    string | null
+  >(null);
+  const [rescheduleSuggestions, setRescheduleSuggestions] = useState<
+    AvailabilitySuggestion[]
+  >([]);
+  const [loadingRescheduleSuggestionsId, setLoadingRescheduleSuggestionsId] =
+    useState<string | null>(null);
+  const [reschedulingSlotKey, setReschedulingSlotKey] = useState<string | null>(
+    null
+  );
   const [creatingSessionAppointmentId, setCreatingSessionAppointmentId] =
     useState<string | null>(null);
   const [selectedPrescriptionByAppointment, setSelectedPrescriptionByAppointment] =
@@ -358,13 +391,19 @@ export default function AppointmentsDashboardPage() {
     setError(null);
     setSuccess(null);
 
+    const originalAppointment = editingAppointmentId
+      ? appointments.find((appointment) => appointment.id === editingAppointmentId)
+      : null;
+    const notes = originalAppointment
+      ? preserveCalendarTechnicalNotes(originalAppointment.notes, form.notes)
+      : form.notes;
     const payload = {
       patientId: form.patientId,
       startsAt: toIsoDate(form.startsAt),
       endsAt: toIsoDate(form.endsAt),
       status: form.status,
       source: form.source,
-      notes: form.notes,
+      notes,
     };
 
     try {
@@ -460,6 +499,110 @@ export default function AppointmentsDashboardPage() {
       );
     } finally {
       setCreatingSessionAppointmentId(null);
+    }
+  };
+
+  const handleSuggestAvailability = async () => {
+    setLoadingSuggestions(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const suggestions = await request<AvailabilitySuggestion[]>(
+        "/api/hugo/availability/suggest"
+      );
+      setAvailabilitySuggestions(suggestions);
+      if (!suggestions.length) {
+        setSuccess("Aucun créneau libre trouvé sur les prochains jours.");
+      }
+    } catch (suggestError) {
+      setError(
+        suggestError instanceof Error
+          ? suggestError.message
+          : "Impossible de proposer des créneaux"
+      );
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleOpenReschedule = async (appointment: Appointment) => {
+    if (appointment.source !== "MANUAL") {
+      setError(
+        "Ce rendez-vous vient d’un calendrier externe. Modifiez-le dans Apple Calendar ou Doctena pour éviter une désynchronisation."
+      );
+      setSuccess(null);
+      return;
+    }
+
+    if (rescheduleAppointmentId === appointment.id) {
+      setRescheduleAppointmentId(null);
+      setRescheduleSuggestions([]);
+      return;
+    }
+
+    setRescheduleAppointmentId(appointment.id);
+    setLoadingRescheduleSuggestionsId(appointment.id);
+    setRescheduleSuggestions([]);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const suggestions = await request<AvailabilitySuggestion[]>(
+        "/api/hugo/availability/suggest"
+      );
+      setRescheduleSuggestions(suggestions.slice(0, 10));
+      if (!suggestions.length) {
+        setSuccess("Aucun créneau libre trouvé sur les prochains jours.");
+      }
+    } catch (suggestError) {
+      setError(
+        suggestError instanceof Error
+          ? suggestError.message
+          : "Impossible de proposer des créneaux"
+      );
+    } finally {
+      setLoadingRescheduleSuggestionsId(null);
+    }
+  };
+
+  const handleRescheduleAppointment = async (
+    appointment: Appointment,
+    suggestion: AvailabilitySuggestion
+  ) => {
+    const slotKey = `${appointment.id}:${suggestion.startsAt}`;
+    setReschedulingSlotKey(slotKey);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const result = await request<RescheduleResult>(
+        `/api/hugo/appointments/${appointment.id}/reschedule`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            startsAt: suggestion.startsAt,
+            endsAt: suggestion.endsAt,
+          }),
+        }
+      );
+
+      setRescheduleAppointmentId(null);
+      setRescheduleSuggestions([]);
+      await loadAppointments();
+      setSuccess(
+        result.linkedSessionUpdated
+          ? "Rendez-vous déplacé et séance synchronisée."
+          : "Rendez-vous déplacé."
+      );
+    } catch (rescheduleError) {
+      setError(
+        rescheduleError instanceof Error
+          ? rescheduleError.message
+          : "Impossible de déplacer le rendez-vous"
+      );
+    } finally {
+      setReschedulingSlotKey(null);
     }
   };
 
@@ -743,7 +886,57 @@ export default function AppointmentsDashboardPage() {
               >
                 Actualiser
               </button>
+              <button
+                type="button"
+                onClick={handleSuggestAvailability}
+                disabled={loadingSuggestions}
+                className={BUTTON_DARK}
+              >
+                {loadingSuggestions
+                  ? "Recherche..."
+                  : "Proposer des créneaux"}
+              </button>
             </div>
+
+            {availabilitySuggestions.length > 0 && (
+              <div className="border-b border-black/5 bg-cyan-50/35 px-5 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                      Disponibilités
+                    </p>
+                    <h3 className="mt-1 text-sm font-semibold tracking-[-0.02em] text-black/70">
+                      Créneaux proposés
+                    </h3>
+                  </div>
+                  <span className="rounded-full border border-cyan-100 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-cyan-800/65">
+                    {availabilitySuggestions.length} libres
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-2 md:grid-cols-2">
+                  {availabilitySuggestions.slice(0, 10).map((suggestion) => (
+                    <div
+                      key={suggestion.startsAt}
+                      className="rounded-2xl border border-white/70 bg-white/60 px-4 py-3 shadow-[0_10px_24px_rgba(54,69,79,0.04)]"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold tracking-[-0.02em]">
+                            {suggestion.label}
+                          </p>
+                          <p className="mt-1 text-xs font-medium capitalize text-black/42">
+                            {suggestion.dayLabel}
+                          </p>
+                        </div>
+                        <span className="rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#5f7f68]">
+                          Disponible
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {loading ? (
               <div className="space-y-3 p-5">
@@ -771,6 +964,7 @@ export default function AppointmentsDashboardPage() {
                     patientPrescriptions[0]?.id ||
                     "";
                   const isSessionLinked = Boolean(appointment.linkedSessionId);
+                  const displayNotes = cleanCalendarNotes(appointment.notes);
 
                   return (
                     <div
@@ -797,9 +991,9 @@ export default function AppointmentsDashboardPage() {
                             Source {appointment.source}
                           </span>
                         </div>
-                        {appointment.notes && (
+                        {displayNotes && (
                           <p className="mt-3 text-sm font-medium leading-6 text-black/50">
-                            {appointment.notes}
+                            {displayNotes}
                           </p>
                         )}
                         <div className="mt-4 grid gap-2 rounded-2xl border border-white/70 bg-white/45 p-3 backdrop-blur-xl sm:grid-cols-[1fr_auto]">
@@ -858,11 +1052,88 @@ export default function AppointmentsDashboardPage() {
                               ? "Séance créée"
                               : creatingSessionAppointmentId === appointment.id
                               ? "Création..."
-                              : "Créer séance"}
+                            : "Créer séance"}
                           </button>
                         </div>
+                        {appointment.source === "MANUAL" &&
+                          rescheduleAppointmentId === appointment.id && (
+                            <div className="mt-3 rounded-2xl border border-cyan-100/80 bg-cyan-50/45 p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-cyan-800/60">
+                                  Créneaux disponibles
+                                </p>
+                                {loadingRescheduleSuggestionsId ===
+                                  appointment.id && (
+                                  <span className="text-xs font-semibold text-black/40">
+                                    Recherche...
+                                  </span>
+                                )}
+                              </div>
+                              {!loadingRescheduleSuggestionsId &&
+                                !rescheduleSuggestions.length && (
+                                  <p className="mt-3 text-sm font-medium text-black/45">
+                                    Aucun créneau libre trouvé.
+                                  </p>
+                                )}
+                              <div className="mt-3 grid gap-2">
+                                {rescheduleSuggestions.slice(0, 8).map((suggestion) => {
+                                  const slotKey = `${appointment.id}:${suggestion.startsAt}`;
+
+                                  return (
+                                    <div
+                                      key={slotKey}
+                                      className="flex flex-col gap-2 rounded-2xl border border-white/70 bg-white/65 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+                                    >
+                                      <div>
+                                        <p className="text-sm font-semibold tracking-[-0.02em]">
+                                          {suggestion.label}
+                                        </p>
+                                        <p className="mt-1 text-xs font-medium capitalize text-black/42">
+                                          {suggestion.dayLabel}
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleRescheduleAppointment(
+                                            appointment,
+                                            suggestion
+                                          )
+                                        }
+                                        disabled={reschedulingSlotKey === slotKey}
+                                        className={BUTTON_DARK}
+                                      >
+                                        {reschedulingSlotKey === slotKey
+                                          ? "Déplacement..."
+                                          : "Choisir ce créneau"}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        {appointment.source !== "MANUAL" && (
+                          <p className="mt-3 text-xs font-semibold text-black/35">
+                            À modifier dans le calendrier source.
+                          </p>
+                        )}
                       </div>
                       <div className="flex flex-wrap items-start gap-2 lg:justify-end">
+                        {appointment.source === "MANUAL" && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReschedule(appointment)}
+                            disabled={
+                              loadingRescheduleSuggestionsId === appointment.id
+                            }
+                            className={BUTTON_LIGHT}
+                          >
+                            {loadingRescheduleSuggestionsId === appointment.id
+                              ? "Recherche..."
+                              : "Déplacer"}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
