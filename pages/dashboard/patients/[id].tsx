@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
+import { cleanCalendarNotes } from "../../../lib/hugo-display";
 
 type PatientStatus = "ACTIVE" | "INACTIVE" | "ARCHIVED";
 type PrescriptionStatus = "ACTIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED";
@@ -565,7 +566,8 @@ export default function PatientPremiumPage() {
                     </h2>
                   </div>
                   <p className="mt-4 text-sm font-medium leading-7 text-black/50">
-                    {summary.patient.notes || "Aucune note patient pour le moment."}
+                    {cleanCalendarNotes(summary.patient.notes) ||
+                      "Aucune note patient pour le moment."}
                   </p>
                 </div>
               </div>
