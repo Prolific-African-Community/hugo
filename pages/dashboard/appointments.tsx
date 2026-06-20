@@ -485,6 +485,9 @@ export default function AppointmentsDashboardPage() {
             <NavButton icon="calendar" onClick={() => router.push("/dashboard/appointments")}>
               Rendez-vous
             </NavButton>
+            <NavButton icon="calendar" onClick={() => router.push("/dashboard/calendar-settings")}>
+              Agenda
+            </NavButton>
             <NavButton
               icon="user"
               onClick={() => router.push(`/dashboard/patients${entityQuery}`)}

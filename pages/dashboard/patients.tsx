@@ -353,6 +353,14 @@ export default function PatientsDashboardPage() {
             </button>
             <button
               type="button"
+              onClick={() => router.push("/dashboard/calendar-settings")}
+              className={BUTTON_LIGHT}
+            >
+              <NavIcon name="calendar" />
+              Agenda
+            </button>
+            <button
+              type="button"
               onClick={() => router.push("/dashboard/prescriptions")}
               className={BUTTON_LIGHT}
             >

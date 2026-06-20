@@ -524,6 +524,14 @@ export default function CalendarSettingsPage() {
               <Icon name="calendar" className="h-3.5 w-3.5 text-cyan-700/60" />
               Rendez-vous
             </button>
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/calendar-settings")}
+              className={BUTTON_LIGHT}
+            >
+              <Icon name="calendar" className="h-3.5 w-3.5 text-cyan-700/60" />
+              Agenda
+            </button>
           </div>
         </nav>
       </header>
@@ -542,8 +550,7 @@ export default function CalendarSettingsPage() {
                 Connexion agenda
               </h1>
               <p className="mt-3 max-w-2xl text-base font-medium leading-7 text-black/48">
-                Enregistrez une URL privée .ics. Hugo la stocke pour la future
-                synchronisation, sans appeler le calendrier dans ce run.
+                Enregistrez une URL privée .ics. 
               </p>
             </div>
             <button
