@@ -11,6 +11,7 @@ import {
   decryptCalDavPassword,
   isWritableCalendarTargetUrl,
   READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
+  updateCalDavEvent,
 } from "../../../../../lib/apple-caldav";
 import { jsonSuccess } from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
@@ -106,7 +107,14 @@ const pushCalendarSyncAction = async (
     return readableError(res, 400, "Action must be PENDING or FAILED");
   }
 
-  if (action.actionType !== CalendarSyncActionType.CREATE_EVENT) {
+  if (action.actionType === CalendarSyncActionType.DELETE_EVENT) {
+    return readableError(res, 400, "DELETE_EVENT non supporté dans ce run.");
+  }
+
+  if (
+    action.actionType !== CalendarSyncActionType.CREATE_EVENT &&
+    action.actionType !== CalendarSyncActionType.UPDATE_EVENT
+  ) {
     return readableError(res, 400, "Action non supportée dans ce run.");
   }
 
@@ -117,6 +125,8 @@ const pushCalendarSyncAction = async (
   if (!action.appointment.startsAt || !action.appointment.endsAt) {
     return readableError(res, 400, "Dates de rendez-vous manquantes.");
   }
+
+  const appointment = action.appointment;
 
   const connection =
     action.calendarConnection ||
@@ -161,6 +171,29 @@ const pushCalendarSyncAction = async (
     return readableError(res, 400, READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
   }
 
+  const selectedCalendarUrl = connection.selectedCalendarUrl;
+  const caldavUsername = connection.caldavUsername;
+
+  const mapping =
+    action.mapping ||
+    (await prisma.calendarEventMapping.findUnique({
+      where: { appointmentId: appointment.id },
+    }));
+
+  if (action.actionType === CalendarSyncActionType.UPDATE_EVENT) {
+    if (!mapping) {
+      return readableError(
+        res,
+        400,
+        "Mapping Apple Calendar introuvable pour ce rendez-vous."
+      );
+    }
+
+    if (!mapping.externalEventId) {
+      return readableError(res, 400, "UID Apple Calendar manquant.");
+    }
+  }
+
   await prisma.calendarSyncAction.update({
     where: { id: action.id },
     data: {
@@ -173,60 +206,102 @@ const pushCalendarSyncAction = async (
     const password = decryptCalDavPassword(connection.caldavPasswordEncrypted);
     const title = buildEventTitle(action);
     const description = getPayloadString(action.payload, "notes");
-    const uid = action.mapping?.externalEventId || undefined;
-    const result = await createCalDavEvent({
-      selectedCalendarUrl: connection.selectedCalendarUrl,
-      username: connection.caldavUsername,
-      password,
-      uid,
-      title,
-      startsAt: action.appointment.startsAt,
-      endsAt: action.appointment.endsAt,
-      description,
-    });
+    const pushedMapping =
+      action.actionType === CalendarSyncActionType.CREATE_EVENT
+        ? await (async () => {
+            const result = await createCalDavEvent({
+              selectedCalendarUrl,
+              username: caldavUsername,
+              password,
+              uid: mapping?.externalEventId || undefined,
+              title,
+              startsAt: appointment.startsAt,
+              endsAt: appointment.endsAt,
+              description,
+            });
 
-    const mapping = await prisma.calendarEventMapping.upsert({
-      where: { appointmentId: action.appointment.id },
-      create: {
-        entityId: cabinet.cabinetId,
-        appointmentId: action.appointment.id,
-        calendarConnectionId: connection.id,
-        provider: CalendarProvider.APPLE_CALENDAR,
-        externalEventId: result.externalEventId,
-        externalCalendarId: result.externalCalendarUrl,
-        externalEtag: result.etag,
-        lastPushedAt: new Date(),
-        syncStatus: CalendarEventSyncStatus.SYNCED,
-        lastSyncError: null,
-      },
-      update: {
-        calendarConnectionId: connection.id,
-        provider: CalendarProvider.APPLE_CALENDAR,
-        externalEventId: result.externalEventId,
-        externalCalendarId: result.externalCalendarUrl,
-        externalEtag: result.etag,
-        lastPushedAt: new Date(),
-        syncStatus: CalendarEventSyncStatus.SYNCED,
-        lastSyncError: null,
-      },
-      select: {
-        id: true,
-        appointmentId: true,
-        calendarConnectionId: true,
-        provider: true,
-        externalEventId: true,
-        externalCalendarId: true,
-        externalEtag: true,
-        lastPushedAt: true,
-        syncStatus: true,
-      },
-    });
+            return prisma.calendarEventMapping.upsert({
+              where: { appointmentId: appointment.id },
+              create: {
+                entityId: cabinet.cabinetId,
+                appointmentId: appointment.id,
+                calendarConnectionId: connection.id,
+                provider: CalendarProvider.APPLE_CALENDAR,
+                externalEventId: result.externalEventId,
+                externalCalendarId: result.externalCalendarUrl,
+                externalEtag: result.etag,
+                lastPushedAt: new Date(),
+                syncStatus: CalendarEventSyncStatus.SYNCED,
+                lastSyncError: null,
+              },
+              update: {
+                calendarConnectionId: connection.id,
+                provider: CalendarProvider.APPLE_CALENDAR,
+                externalEventId: result.externalEventId,
+                externalCalendarId: result.externalCalendarUrl,
+                externalEtag: result.etag,
+                lastPushedAt: new Date(),
+                syncStatus: CalendarEventSyncStatus.SYNCED,
+                lastSyncError: null,
+              },
+              select: {
+                id: true,
+                appointmentId: true,
+                calendarConnectionId: true,
+                provider: true,
+                externalEventId: true,
+                externalCalendarId: true,
+                externalEtag: true,
+                lastPushedAt: true,
+                syncStatus: true,
+              },
+            });
+          })()
+        : await (async () => {
+            if (!mapping) {
+              throw new Error("Mapping Apple Calendar introuvable pour ce rendez-vous.");
+            }
+
+            const result = await updateCalDavEvent({
+              selectedCalendarUrl,
+              username: caldavUsername,
+              password,
+              externalEventId: mapping.externalEventId,
+              title,
+              startsAt: appointment.startsAt,
+              endsAt: appointment.endsAt,
+              description,
+              etag: mapping.externalEtag,
+            });
+
+            return prisma.calendarEventMapping.update({
+              where: { id: mapping.id },
+              data: {
+                calendarConnectionId: connection.id,
+                externalEtag: result.etag,
+                lastPushedAt: new Date(),
+                syncStatus: CalendarEventSyncStatus.SYNCED,
+                lastSyncError: null,
+              },
+              select: {
+                id: true,
+                appointmentId: true,
+                calendarConnectionId: true,
+                provider: true,
+                externalEventId: true,
+                externalCalendarId: true,
+                externalEtag: true,
+                lastPushedAt: true,
+                syncStatus: true,
+              },
+            });
+          })();
 
     await prisma.calendarSyncAction.update({
       where: { id: action.id },
       data: {
         status: CalendarSyncActionStatus.DONE,
-        mappingId: mapping.id,
+        mappingId: pushedMapping.id,
         calendarConnectionId: connection.id,
         error: null,
         processedAt: new Date(),
@@ -236,7 +311,7 @@ const pushCalendarSyncAction = async (
     return jsonSuccess(res, {
       actionId: action.id,
       status: CalendarSyncActionStatus.DONE,
-      mapping,
+      mapping: pushedMapping,
     });
   } catch (error) {
     const message =
@@ -254,9 +329,11 @@ const pushCalendarSyncAction = async (
         },
       });
 
-      if (action.mappingId) {
+      const failedMappingId = action.mappingId || mapping?.id;
+
+      if (failedMappingId) {
         await tx.calendarEventMapping.update({
-          where: { id: action.mappingId },
+          where: { id: failedMappingId },
           data: {
             syncStatus: CalendarEventSyncStatus.ERROR,
             lastSyncError: message,

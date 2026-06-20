@@ -1672,7 +1672,8 @@ export default function CalendarSettingsPage() {
                               )}
                             </div>
 
-                            {action.actionType === "CREATE_EVENT" ? (
+                            {action.actionType === "CREATE_EVENT" ||
+                            action.actionType === "UPDATE_EVENT" ? (
                               <div className="flex flex-col items-start gap-2 sm:items-end">
                               <button
                                 type="button"
@@ -1690,7 +1691,9 @@ export default function CalendarSettingsPage() {
                                 <Icon name="upload" className="h-3.5 w-3.5" />
                                 {pushingActionId === action.id
                                   ? "Push..."
-                                  : "Pousser vers Apple Calendar"}
+                                  : action.actionType === "UPDATE_EVENT"
+                                    ? "Mettre à jour Apple Calendar"
+                                    : "Créer dans Apple Calendar"}
                               </button>
                               {primaryConnection.writeStatus === "READY" &&
                                 (primaryConnection.targetCalendarInvalid ||

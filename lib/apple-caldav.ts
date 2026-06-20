@@ -17,6 +17,18 @@ interface CreateCalDavEventParams {
   description?: string | null;
 }
 
+interface UpdateCalDavEventParams {
+  selectedCalendarUrl: string;
+  username: string;
+  password: string;
+  externalEventId: string;
+  title: string;
+  startsAt: Date | string;
+  endsAt: Date | string;
+  description?: string | null;
+  etag?: string | null;
+}
+
 export interface DiscoveredCalendar {
   name: string;
   url: string;
@@ -105,6 +117,56 @@ const buildEventUrl = (calendarUrl: string, uid: string) => {
   const baseUrl = normalizedUrl.endsWith("/") ? normalizedUrl : `${normalizedUrl}/`;
 
   return new URL(`${encodeURIComponent(uid)}.ics`, baseUrl).toString();
+};
+
+const buildIcsEvent = ({
+  description,
+  endsAt,
+  startsAt,
+  title,
+  uid,
+}: {
+  description?: string | null;
+  endsAt: Date;
+  startsAt: Date;
+  title: string;
+  uid: string;
+}) => {
+  const trimmedDescription = description?.trim();
+
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Hugo//Calendar Sync//FR",
+    "BEGIN:VEVENT",
+    `UID:${escapeIcsText(uid)}`,
+    `DTSTAMP:${formatIcsDate(new Date())}`,
+    `DTSTART:${formatIcsDate(startsAt)}`,
+    `DTEND:${formatIcsDate(endsAt)}`,
+    `SUMMARY:${escapeIcsText(title)}`,
+    ...(trimmedDescription
+      ? [`DESCRIPTION:${escapeIcsText(trimmedDescription)}`]
+      : []),
+    "END:VEVENT",
+    "END:VCALENDAR",
+    "",
+  ].join("\r\n");
+};
+
+const parseEventDates = (startsAtValue: Date | string, endsAtValue: Date | string) => {
+  const startsAt =
+    startsAtValue instanceof Date ? startsAtValue : new Date(startsAtValue);
+  const endsAt = endsAtValue instanceof Date ? endsAtValue : new Date(endsAtValue);
+
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    throw new Error("Dates de rendez-vous invalides");
+  }
+
+  if (endsAt <= startsAt) {
+    throw new Error("La fin du rendez-vous doit être après le début");
+  }
+
+  return { endsAt, startsAt };
 };
 
 const ensureTrailingSlash = (value: string) => {
@@ -298,35 +360,16 @@ export async function createCalDavEvent(params: CreateCalDavEventParams) {
     throw new Error("Calendrier Apple Calendar cible manquant");
   }
 
-  const startsAt = params.startsAt instanceof Date ? params.startsAt : new Date(params.startsAt);
-  const endsAt = params.endsAt instanceof Date ? params.endsAt : new Date(params.endsAt);
-
-  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
-    throw new Error("Dates de rendez-vous invalides");
-  }
-
-  if (endsAt <= startsAt) {
-    throw new Error("La fin du rendez-vous doit être après le début");
-  }
-
+  const { endsAt, startsAt } = parseEventDates(params.startsAt, params.endsAt);
   const uid = params.uid || `hugo-${crypto.randomUUID()}`;
   const eventUrl = buildEventUrl(params.selectedCalendarUrl, uid);
-  const description = params.description?.trim();
-  const ics = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Hugo//Calendar Sync//FR",
-    "BEGIN:VEVENT",
-    `UID:${escapeIcsText(uid)}`,
-    `DTSTAMP:${formatIcsDate(new Date())}`,
-    `DTSTART:${formatIcsDate(startsAt)}`,
-    `DTEND:${formatIcsDate(endsAt)}`,
-    `SUMMARY:${escapeIcsText(params.title)}`,
-    ...(description ? [`DESCRIPTION:${escapeIcsText(description)}`] : []),
-    "END:VEVENT",
-    "END:VCALENDAR",
-    "",
-  ].join("\r\n");
+  const ics = buildIcsEvent({
+    description: params.description,
+    endsAt,
+    startsAt,
+    title: params.title,
+    uid,
+  });
 
   const response = await fetch(eventUrl, {
     method: "PUT",
@@ -349,6 +392,53 @@ export async function createCalDavEvent(params: CreateCalDavEventParams) {
   return {
     externalEventId: uid,
     externalCalendarUrl: params.selectedCalendarUrl,
+    status: response.status,
+    etag: response.headers.get("etag"),
+  };
+}
+
+export async function updateCalDavEvent(params: UpdateCalDavEventParams) {
+  if (!params.externalEventId.trim()) {
+    throw new Error("UID Apple Calendar manquant");
+  }
+
+  const { endsAt, startsAt } = parseEventDates(params.startsAt, params.endsAt);
+  const eventUrl = buildEventUrl(
+    params.selectedCalendarUrl,
+    params.externalEventId
+  );
+  const ics = buildIcsEvent({
+    description: params.description,
+    endsAt,
+    startsAt,
+    title: params.title,
+    uid: params.externalEventId,
+  });
+
+  const response = await fetch(eventUrl, {
+    method: "PUT",
+    headers: {
+      Authorization: basicAuthHeader(params.username, params.password),
+      "Content-Type": "text/calendar; charset=utf-8",
+      ...(params.etag ? { "If-Match": params.etag } : {}),
+    },
+    body: ics,
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Identifiants CalDAV refusés");
+  }
+
+  if (response.status === 412) {
+    throw new Error("L'événement Apple Calendar a changé depuis la dernière synchronisation.");
+  }
+
+  if (!response.ok && response.status !== 201 && response.status !== 204) {
+    throw new Error(`Mise à jour Apple Calendar refusée (${response.status})`);
+  }
+
+  return {
+    externalEventId: params.externalEventId,
     status: response.status,
     etag: response.headers.get("etag"),
   };
