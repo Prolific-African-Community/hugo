@@ -1,4 +1,8 @@
-import { CalendarConnectionStatus, CalendarProvider } from "@prisma/client";
+import {
+  CalendarConnectionStatus,
+  CalendarProvider,
+  CalendarSyncActionStatus,
+} from "@prisma/client";
 import type { NextApiResponse } from "next";
 import { jsonError, jsonSuccess } from "../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
@@ -30,6 +34,41 @@ const calendarConnectionSelect = {
   lastError: true,
   createdAt: true,
   updatedAt: true,
+  syncActions: {
+    where: {
+      status: {
+        in: [
+          CalendarSyncActionStatus.PENDING,
+          CalendarSyncActionStatus.FAILED,
+        ],
+      },
+    },
+    orderBy: {
+      createdAt: "desc" as const,
+    },
+    take: 20,
+    select: {
+      id: true,
+      actionType: true,
+      status: true,
+      error: true,
+      createdAt: true,
+      appointment: {
+        select: {
+          id: true,
+          startsAt: true,
+          endsAt: true,
+          patient: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      },
+    },
+  },
 };
 
 const getRequiredString = (value: unknown) => {

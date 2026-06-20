@@ -4,6 +4,13 @@ import { useRouter } from "next/router";
 type CalendarProvider = "APPLE_CALENDAR";
 type CalendarConnectionStatus = "CONNECTED" | "DISCONNECTED" | "ERROR";
 type CalendarWriteStatus = "NOT_CONFIGURED" | "READY" | "ERROR" | "DISABLED";
+type CalendarSyncActionType = "CREATE_EVENT" | "UPDATE_EVENT" | "DELETE_EVENT";
+type CalendarSyncActionStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "DONE"
+  | "FAILED"
+  | "CANCELLED";
 
 interface ApiResponse<T> {
   success: boolean;
@@ -31,6 +38,7 @@ interface CalendarConnection {
   lastError?: string | null;
   createdAt: string;
   updatedAt: string;
+  syncActions?: CalendarSyncAction[];
 }
 
 interface CalendarConnectionForm {
@@ -62,6 +70,36 @@ interface CalDavTestResult {
   selectedCalendarUrl?: string | null;
   selectedCalendarName?: string | null;
   calendars: CalDavCalendar[];
+}
+
+interface CalendarSyncAction {
+  id: string;
+  actionType: CalendarSyncActionType;
+  status: CalendarSyncActionStatus;
+  error?: string | null;
+  createdAt: string;
+  appointment?: {
+    id: string;
+    startsAt: string;
+    endsAt: string;
+    patient: {
+      id: string;
+      firstName: string;
+      lastName: string;
+    };
+  } | null;
+}
+
+interface CalendarSyncPushResult {
+  actionId: string;
+  status: CalendarSyncActionStatus;
+  mapping: {
+    id: string;
+    appointmentId: string;
+    externalEventId: string;
+    externalCalendarId?: string | null;
+    syncStatus: string;
+  };
 }
 
 interface Patient {
@@ -230,6 +268,18 @@ function writeStatusTone(status: CalendarWriteStatus) {
   return "border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]";
 }
 
+function syncActionTone(status: CalendarSyncActionStatus) {
+  if (status === "FAILED") {
+    return "border-[#f3ddd7]/80 bg-[#fff1ed]/80 text-[#9a6657]";
+  }
+
+  if (status === "PENDING") {
+    return "border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]";
+  }
+
+  return "border-cyan-100/80 bg-cyan-50/70 text-cyan-800/70";
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "Jamais";
 
@@ -332,6 +382,7 @@ export default function CalendarSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [testingCalDavId, setTestingCalDavId] = useState<string | null>(null);
+  const [pushingActionId, setPushingActionId] = useState<string | null>(null);
   const [selectingCalendarKey, setSelectingCalendarKey] = useState<
     string | null
   >(null);
@@ -659,6 +710,32 @@ export default function CalendarSettingsPage() {
       );
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const handlePushCalendarAction = async (action: CalendarSyncAction) => {
+    setPushingActionId(action.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await request<CalendarSyncPushResult>(
+        `/api/hugo/calendar-sync-actions/${action.id}/push`,
+        {
+          method: "POST",
+        }
+      );
+      setSuccess("Action poussée vers Apple Calendar.");
+      await loadConnections();
+    } catch (pushError) {
+      setError(
+        pushError instanceof Error
+          ? pushError.message
+          : "Impossible de pousser l'action vers Apple Calendar"
+      );
+      await loadConnections();
+    } finally {
+      setPushingActionId(null);
     }
   };
 
@@ -1375,6 +1452,90 @@ export default function CalendarSettingsPage() {
                               );
                             })}
                           </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 rounded-3xl border border-white/70 bg-white/45 p-4 backdrop-blur-xl">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                            Actions Apple Calendar en attente
+                          </p>
+                          <p className="mt-1 text-xs font-medium leading-5 text-black/45">
+                            Traitement manuel uniquement. Aucun cron ne pousse
+                            la queue automatiquement.
+                          </p>
+                        </div>
+                        <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/45">
+                          {connection.syncActions?.length || 0} action
+                          {(connection.syncActions?.length || 0) > 1 ? "s" : ""}
+                        </span>
+                      </div>
+
+                      {!connection.syncActions?.length ? (
+                        <p className="mt-4 text-sm font-medium text-black/42">
+                          Aucune action Apple Calendar à pousser.
+                        </p>
+                      ) : (
+                        <div className="mt-4 space-y-3">
+                          {connection.syncActions.map((action) => (
+                            <div
+                              key={action.id}
+                              className="rounded-2xl border border-white/70 bg-white/60 p-3"
+                            >
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold tracking-[-0.02em]">
+                                      {action.actionType}
+                                    </p>
+                                    <span
+                                      className={cn(
+                                        "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                                        syncActionTone(action.status)
+                                      )}
+                                    >
+                                      {action.status}
+                                    </span>
+                                  </div>
+                                  <p className="mt-2 text-xs font-medium text-black/45">
+                                    {action.appointment
+                                      ? `${patientName(action.appointment.patient)} - ${formatDate(action.appointment.startsAt)}`
+                                      : "Rendez-vous introuvable"}
+                                  </p>
+                                  {action.error && (
+                                    <p className="mt-2 rounded-2xl border border-[#f3ddd7]/80 bg-[#fff1ed]/80 px-3 py-2 text-xs font-semibold leading-5 text-[#9a6657]">
+                                      {action.error}
+                                    </p>
+                                  )}
+                                </div>
+
+                                {action.actionType === "CREATE_EVENT" ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handlePushCalendarAction(action)
+                                    }
+                                    disabled={
+                                      pushingActionId === action.id ||
+                                      connection.writeStatus !== "READY"
+                                    }
+                                    className={BUTTON_DARK}
+                                  >
+                                    <Icon name="upload" className="h-3.5 w-3.5" />
+                                    {pushingActionId === action.id
+                                      ? "Push..."
+                                      : "Pousser vers Apple Calendar"}
+                                  </button>
+                                ) : (
+                                  <span className="rounded-full border border-black/10 bg-white/55 px-3 py-2 text-xs font-semibold text-black/38">
+                                    Non supportée dans ce run
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
