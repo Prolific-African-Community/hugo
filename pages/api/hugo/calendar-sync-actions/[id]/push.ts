@@ -9,7 +9,7 @@ import type { NextApiResponse } from "next";
 import {
   createCalDavEvent,
   decryptCalDavPassword,
-  isReadOnlyAppleCalendarUrl,
+  isWritableCalendarTargetUrl,
   READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
 } from "../../../../../lib/apple-caldav";
 import { jsonSuccess } from "../../../../../lib/accounting-api";
@@ -157,7 +157,7 @@ const pushCalendarSyncAction = async (
     );
   }
 
-  if (isReadOnlyAppleCalendarUrl(connection.selectedCalendarUrl)) {
+  if (!isWritableCalendarTargetUrl(connection.selectedCalendarUrl)) {
     return readableError(res, 400, READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
   }
 

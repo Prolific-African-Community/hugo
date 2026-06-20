@@ -25,7 +25,7 @@ export interface DiscoveredCalendar {
 }
 
 export const READ_ONLY_APPLE_CALENDAR_URL_MESSAGE =
-  "Cette URL est une URL Apple Calendar publiée en lecture seule. Elle peut servir à importer le calendrier, mais pas à écrire dedans. Utilisez la découverte CalDAV ou sélectionnez un calendrier iCloud détecté.";
+  "Cette URL est une URL Apple Calendar publiée en lecture seule. Elle peut servir à importer le calendrier, mais pas à écrire dedans. Sélectionnez un calendrier CalDAV détecté.";
 
 export function normalizeCalDavUrl(input: string) {
   const trimmed = input.trim();
@@ -50,11 +50,26 @@ export function normalizeCalDavUrl(input: string) {
 
 export function isReadOnlyAppleCalendarUrl(input: string) {
   const trimmed = input.trim().toLowerCase();
-  return trimmed.startsWith("webcal://") || trimmed.includes("/published/2/");
+  return (
+    trimmed.startsWith("webcal://") ||
+    trimmed.includes("/published/2/") ||
+    trimmed.endsWith(".ics")
+  );
+}
+
+export function isWritableCalendarTargetUrl(input: string | null | undefined) {
+  if (!input || !input.trim()) return false;
+
+  try {
+    const url = new URL(input.trim());
+    return url.protocol === "https:" && !isReadOnlyAppleCalendarUrl(input);
+  } catch {
+    return false;
+  }
 }
 
 export function assertWritableCalendarUrl(input: string) {
-  if (isReadOnlyAppleCalendarUrl(input)) {
+  if (!isWritableCalendarTargetUrl(input)) {
     throw new Error(READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
   }
 

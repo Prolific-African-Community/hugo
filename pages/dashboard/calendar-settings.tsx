@@ -35,6 +35,8 @@ interface CalendarConnection {
   lastWriteTestAt?: string | null;
   writeStatus: CalendarWriteStatus;
   writeLastError?: string | null;
+  targetCalendarInvalid?: boolean;
+  targetCalendarError?: string | null;
   lastSyncedAt?: string | null;
   lastError?: string | null;
   createdAt: string;
@@ -74,6 +76,8 @@ interface CalDavTestResult {
   writeLastError?: string | null;
   selectedCalendarUrl?: string | null;
   selectedCalendarName?: string | null;
+  targetCalendarInvalid?: boolean;
+  targetCalendarError?: string | null;
   calendars: CalDavCalendar[];
 }
 
@@ -168,11 +172,26 @@ const emptyForm = (): CalendarConnectionForm => ({
 });
 
 const READ_ONLY_APPLE_CALENDAR_URL_MESSAGE =
-  "Cette URL est une URL Apple Calendar publiée en lecture seule. Elle peut servir à importer le calendrier, mais pas à écrire dedans. Utilisez la découverte CalDAV ou sélectionnez un calendrier iCloud détecté.";
+  "Cette URL est une URL Apple Calendar publiée en lecture seule. Elle peut servir à importer le calendrier, mais pas à écrire dedans. Sélectionnez un calendrier CalDAV détecté.";
 
 const isReadOnlyAppleCalendarUrl = (value: string) => {
   const normalized = value.trim().toLowerCase();
-  return normalized.startsWith("webcal://") || normalized.includes("/published/2/");
+  return (
+    normalized.startsWith("webcal://") ||
+    normalized.includes("/published/2/") ||
+    normalized.endsWith(".ics")
+  );
+};
+
+const isWritableCalendarTargetUrl = (value?: string | null) => {
+  if (!value || !value.trim()) return false;
+
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" && !isReadOnlyAppleCalendarUrl(value);
+  } catch {
+    return false;
+  }
 };
 
 function Icon({
@@ -327,6 +346,21 @@ function confidenceTone(confidence?: number) {
   }
 
   return "border-[#f3ddd7]/80 bg-[#fff1ed]/80 text-[#9a6657]";
+}
+
+function formatTargetCalendarUrl(value?: string | null) {
+  if (!value) return "Non sélectionné";
+
+  try {
+    const url = new URL(value);
+    const path =
+      url.pathname.length > 42
+        ? `${url.pathname.slice(0, 24)}...${url.pathname.slice(-12)}`
+        : url.pathname;
+    return `${url.host}${path}`;
+  } catch {
+    return value.length > 56 ? `${value.slice(0, 36)}...${value.slice(-12)}` : value;
+  }
 }
 
 function eventKey(event: CalendarSyncEvent) {
@@ -626,6 +660,8 @@ export default function CalendarSettingsPage() {
                 caldavUsername: formState.username,
                 selectedCalendarUrl: result.selectedCalendarUrl,
                 selectedCalendarName: result.selectedCalendarName,
+                targetCalendarInvalid: result.targetCalendarInvalid || false,
+                targetCalendarError: result.targetCalendarError || null,
                 capabilities: {
                   calendars: result.calendars,
                   calendarCount: result.calendars.length,
@@ -720,7 +756,7 @@ export default function CalendarSettingsPage() {
       return;
     }
 
-    if (isReadOnlyAppleCalendarUrl(targetCalendarUrl)) {
+    if (!isWritableCalendarTargetUrl(targetCalendarUrl)) {
       setError(READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
       setSuccess(null);
       return;
@@ -731,6 +767,49 @@ export default function CalendarSettingsPage() {
       url: targetCalendarUrl,
       writable: true,
     });
+  };
+
+  const handleResetWriteCalendar = async (connection: CalendarConnection) => {
+    setUpdatingId(connection.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const updatedConnection = await request<CalendarConnection>(
+        `/api/hugo/calendar-connections/${connection.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            selectedCalendarUrl: null,
+            selectedCalendarName: null,
+          }),
+        }
+      );
+
+      setConnections((current) =>
+        current.map((item) =>
+          item.id === updatedConnection.id ? updatedConnection : item
+        )
+      );
+      setCaldavFormByConnection((current) => ({
+        ...current,
+        [connection.id]: {
+          ...getCalDavForm(connection),
+          ...current[connection.id],
+          targetCalendarUrl: "",
+          password: "",
+        },
+      }));
+      setSuccess("Calendrier cible réinitialisé.");
+    } catch (resetError) {
+      setError(
+        resetError instanceof Error
+          ? resetError.message
+          : "Impossible de réinitialiser le calendrier cible"
+      );
+    } finally {
+      setUpdatingId(null);
+    }
   };
 
   const handleDisableCalDav = async (connection: CalendarConnection) => {
@@ -1280,7 +1359,8 @@ export default function CalendarSettingsPage() {
                 )}
 
                 {primaryConnection.writeStatus === "READY" &&
-                  !primaryConnection.selectedCalendarUrl && (
+                  !primaryConnection.selectedCalendarUrl &&
+                  !primaryConnection.targetCalendarInvalid && (
                     <p className="rounded-2xl border border-[#eadfca]/80 bg-[#fff7e6]/80 px-4 py-3 text-xs font-semibold leading-5 text-[#7b6745]">
                       Connexion prête, mais aucun calendrier cible n'est
                       sélectionné. Sélectionnez d'abord un calendrier cible
@@ -1385,16 +1465,52 @@ export default function CalendarSettingsPage() {
                   <p className="mt-2 text-xs font-medium text-black/42">
                     Dernier test : {formatDate(primaryConnection.lastWriteTestAt)}
                   </p>
-                  {(primaryConnection.selectedCalendarName ||
-                    primaryConnection.selectedCalendarUrl) && (
+                  {primaryConnection.targetCalendarInvalid && (
+                    <div className="mt-3 rounded-2xl border border-[#f3ddd7]/80 bg-[#fff1ed]/80 px-4 py-3">
+                      <p className="text-xs font-bold text-[#9a6657]">
+                        Calendrier cible invalide
+                      </p>
+                      <p className="mt-1 text-xs font-semibold leading-5 text-[#9a6657]">
+                        {primaryConnection.targetCalendarError ||
+                          READ_ONLY_APPLE_CALENDAR_URL_MESSAGE}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleResetWriteCalendar(primaryConnection)
+                        }
+                        disabled={updatingId === primaryConnection.id}
+                        className={cn(BUTTON_LIGHT, "mt-3")}
+                      >
+                        Réinitialiser le calendrier cible
+                      </button>
+                    </div>
+                  )}
+                  {!primaryConnection.targetCalendarInvalid &&
+                    (primaryConnection.selectedCalendarName ||
+                      primaryConnection.selectedCalendarUrl) && (
                     <div className="mt-3 rounded-2xl border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-4 py-3">
                       <p className="text-xs font-bold text-[#5f7f68]">
                         Calendrier cible sélectionné
                       </p>
-                      <p className="mt-1 break-all text-xs font-medium text-black/45">
-                        {primaryConnection.selectedCalendarName ||
-                          primaryConnection.selectedCalendarUrl}
+                      <p className="mt-1 text-sm font-semibold text-black/60">
+                        {primaryConnection.selectedCalendarName || "Calendrier iCloud"}
                       </p>
+                      <p className="mt-1 break-all text-xs font-medium text-black/45">
+                        {formatTargetCalendarUrl(
+                          primaryConnection.selectedCalendarUrl
+                        )}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleResetWriteCalendar(primaryConnection)
+                        }
+                        disabled={updatingId === primaryConnection.id}
+                        className={cn(BUTTON_LIGHT, "mt-3")}
+                      >
+                        Réinitialiser le calendrier cible
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1564,7 +1680,10 @@ export default function CalendarSettingsPage() {
                                 disabled={
                                   pushingActionId === action.id ||
                                   primaryConnection.writeStatus !== "READY" ||
-                                  !primaryConnection.selectedCalendarUrl
+                                  primaryConnection.targetCalendarInvalid ||
+                                  !isWritableCalendarTargetUrl(
+                                    primaryConnection.selectedCalendarUrl
+                                  )
                                 }
                                 className={BUTTON_DARK}
                               >
@@ -1574,9 +1693,12 @@ export default function CalendarSettingsPage() {
                                   : "Pousser vers Apple Calendar"}
                               </button>
                               {primaryConnection.writeStatus === "READY" &&
-                                !primaryConnection.selectedCalendarUrl && (
+                                (primaryConnection.targetCalendarInvalid ||
+                                  !primaryConnection.selectedCalendarUrl) && (
                                   <p className="max-w-[220px] text-xs font-semibold leading-5 text-[#7b6745]">
-                                    Sélectionnez d'abord un calendrier cible.
+                                    {primaryConnection.targetCalendarInvalid
+                                      ? "Réinitialisez la cible invalide puis sélectionnez un calendrier CalDAV."
+                                      : "Sélectionnez d'abord un calendrier cible."}
                                   </p>
                                 )}
                               </div>

@@ -4,6 +4,10 @@ import {
   CalendarSyncActionStatus,
 } from "@prisma/client";
 import type { NextApiResponse } from "next";
+import {
+  isWritableCalendarTargetUrl,
+  READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
+} from "../../../../lib/apple-caldav";
 import { jsonError, jsonSuccess } from "../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
 import { requireHugoCabinet } from "../../../../lib/hugo-auth";
@@ -71,6 +75,34 @@ const calendarConnectionSelect = {
   },
 };
 
+const serializeCalendarConnection = <
+  T extends {
+    selectedCalendarUrl: string | null;
+    selectedCalendarName: string | null;
+  }
+>(
+  connection: T
+) => {
+  const targetCalendarInvalid = Boolean(
+    connection.selectedCalendarUrl &&
+      !isWritableCalendarTargetUrl(connection.selectedCalendarUrl)
+  );
+
+  return {
+    ...connection,
+    selectedCalendarUrl: targetCalendarInvalid
+      ? null
+      : connection.selectedCalendarUrl,
+    selectedCalendarName: targetCalendarInvalid
+      ? null
+      : connection.selectedCalendarName,
+    targetCalendarInvalid,
+    targetCalendarError: targetCalendarInvalid
+      ? READ_ONLY_APPLE_CALENDAR_URL_MESSAGE
+      : null,
+  };
+};
+
 const getRequiredString = (value: unknown) => {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 };
@@ -100,7 +132,7 @@ const listCalendarConnections = async (
     orderBy: { updatedAt: "desc" },
   });
 
-  return jsonSuccess(res, connections);
+  return jsonSuccess(res, connections.map(serializeCalendarConnection));
 };
 
 const createCalendarConnection = async (
@@ -136,7 +168,7 @@ const createCalendarConnection = async (
     select: calendarConnectionSelect,
   });
 
-  return jsonSuccess(res, connection, 201);
+  return jsonSuccess(res, serializeCalendarConnection(connection), 201);
 };
 
 export default withAuth(

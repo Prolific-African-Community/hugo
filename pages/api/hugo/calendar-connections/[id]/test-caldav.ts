@@ -3,7 +3,9 @@ import type { NextApiResponse } from "next";
 import {
   discoverCalendars,
   encryptCalDavPassword,
+  isWritableCalendarTargetUrl,
   normalizeCalDavUrl,
+  READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
   testCalDavConnection,
 } from "../../../../../lib/apple-caldav";
 import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
@@ -118,12 +120,25 @@ const testCalDav = async (
       },
     });
 
+    const targetCalendarInvalid = Boolean(
+      updatedConnection.selectedCalendarUrl &&
+        !isWritableCalendarTargetUrl(updatedConnection.selectedCalendarUrl)
+    );
+
     return jsonSuccess(res, {
       writeStatus: updatedConnection.writeStatus,
       writeEnabled: updatedConnection.writeEnabled,
       lastWriteTestAt: updatedConnection.lastWriteTestAt,
-      selectedCalendarUrl: updatedConnection.selectedCalendarUrl,
-      selectedCalendarName: updatedConnection.selectedCalendarName,
+      selectedCalendarUrl: targetCalendarInvalid
+        ? null
+        : updatedConnection.selectedCalendarUrl,
+      selectedCalendarName: targetCalendarInvalid
+        ? null
+        : updatedConnection.selectedCalendarName,
+      targetCalendarInvalid,
+      targetCalendarError: targetCalendarInvalid
+        ? READ_ONLY_APPLE_CALENDAR_URL_MESSAGE
+        : null,
       writeLastError: updatedConnection.writeLastError,
       calendars,
     });

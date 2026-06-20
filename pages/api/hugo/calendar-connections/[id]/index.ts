@@ -5,7 +5,7 @@ import {
 } from "@prisma/client";
 import type { NextApiResponse } from "next";
 import {
-  isReadOnlyAppleCalendarUrl,
+  isWritableCalendarTargetUrl,
   READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
 } from "../../../../../lib/apple-caldav";
 import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
@@ -80,6 +80,34 @@ const calendarConnectionSelect = {
   },
 };
 
+const serializeCalendarConnection = <
+  T extends {
+    selectedCalendarUrl: string | null;
+    selectedCalendarName: string | null;
+  }
+>(
+  connection: T
+) => {
+  const targetCalendarInvalid = Boolean(
+    connection.selectedCalendarUrl &&
+      !isWritableCalendarTargetUrl(connection.selectedCalendarUrl)
+  );
+
+  return {
+    ...connection,
+    selectedCalendarUrl: targetCalendarInvalid
+      ? null
+      : connection.selectedCalendarUrl,
+    selectedCalendarName: targetCalendarInvalid
+      ? null
+      : connection.selectedCalendarName,
+    targetCalendarInvalid,
+    targetCalendarError: targetCalendarInvalid
+      ? READ_ONLY_APPLE_CALENDAR_URL_MESSAGE
+      : null,
+  };
+};
+
 const getRequiredConnectionId = (req: AuthenticatedNextApiRequest) => {
   return typeof req.query.id === "string" && req.query.id.trim()
     ? req.query.id.trim()
@@ -134,15 +162,6 @@ const validateCalendarUrl = (value: string) => {
   }
 };
 
-const validateWritableCalendarUrl = (value: string) => {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:";
-  } catch {
-    return false;
-  }
-};
-
 const updateCalendarConnection = async (
   req: AuthenticatedNextApiRequest,
   res: NextApiResponse
@@ -184,14 +203,6 @@ const updateCalendarConnection = async (
     return jsonError(res, 400, "calendarUrl cannot be empty");
   }
 
-  if (selectedCalendarUrl === null) {
-    return jsonError(res, 400, "selectedCalendarUrl cannot be empty");
-  }
-
-  if (selectedCalendarName === null) {
-    return jsonError(res, 400, "selectedCalendarName cannot be empty");
-  }
-
   if (calendarUrl && !validateCalendarUrl(calendarUrl)) {
     return jsonError(res, 400, "calendarUrl must be a valid https or webcal URL");
   }
@@ -208,16 +219,8 @@ const updateCalendarConnection = async (
     return jsonError(res, 400, "A valid writeStatus is required");
   }
 
-  if (selectedCalendarUrl && isReadOnlyAppleCalendarUrl(selectedCalendarUrl)) {
+  if (selectedCalendarUrl && !isWritableCalendarTargetUrl(selectedCalendarUrl)) {
     return jsonError(res, 400, READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
-  }
-
-  if (selectedCalendarUrl && !validateWritableCalendarUrl(selectedCalendarUrl)) {
-    return jsonError(
-      res,
-      400,
-      "selectedCalendarUrl must be a valid https URL"
-    );
   }
 
   const shouldDisableWrite =
@@ -244,7 +247,7 @@ const updateCalendarConnection = async (
     select: calendarConnectionSelect,
   });
 
-  return jsonSuccess(res, connection);
+  return jsonSuccess(res, serializeCalendarConnection(connection));
 };
 
 const deleteCalendarConnection = async (
