@@ -32,6 +32,16 @@ interface Patient {
   id: string;
   firstName: string;
   lastName: string;
+  phone?: string | null;
+  email?: string | null;
+}
+
+interface NewPatientDraft {
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email: string;
+  notes: string;
 }
 
 interface CalendarSyncEvent {
@@ -197,6 +207,53 @@ function eventKey(event: CalendarSyncEvent) {
   return event.uid || `${event.summary || "event"}-${event.startsAt || "date"}`;
 }
 
+function inferPatientFromSummary(summary?: string | null): Pick<NewPatientDraft, "firstName" | "lastName"> {
+  if (!summary) {
+    return { firstName: "", lastName: "" };
+  }
+
+  const noiseWords = new Set([
+    "seance",
+    "séance",
+    "kine",
+    "kiné",
+    "rdv",
+    "rendez",
+    "vous",
+    "rendez-vous",
+    "consultation",
+  ]);
+
+  const normalized = summary
+    .replace(/[|:/()[\]{}]+/g, " ")
+    .replace(/\s+-\s+.*/g, " ")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !noiseWords.has(part.toLowerCase()));
+
+  const nameParts = normalized
+    .filter((part) => /^[A-Za-zÀ-ÖØ-öø-ÿ'-]+\.?$/.test(part))
+    .map((part) => part.replace(/\.$/, ""));
+
+  return {
+    firstName: nameParts[0] || "",
+    lastName: nameParts[1] || "",
+  };
+}
+
+function newPatientDraftFromEvent(event: CalendarSyncEvent): NewPatientDraft {
+  const inferred = inferPatientFromSummary(event.summary);
+
+  return {
+    firstName: inferred.firstName,
+    lastName: inferred.lastName,
+    phone: "",
+    email: "",
+    notes: `Créé depuis Apple Calendar : ${event.summary || "Sans titre"}`,
+  };
+}
+
 export default function CalendarSettingsPage() {
   const router = useRouter();
   const [connections, setConnections] = useState<CalendarConnection[]>([]);
@@ -214,6 +271,12 @@ export default function CalendarSettingsPage() {
   const [creatingAppointmentKey, setCreatingAppointmentKey] = useState<
     string | null
   >(null);
+  const [newPatientByEvent, setNewPatientByEvent] = useState<
+    Record<string, NewPatientDraft>
+  >({});
+  const [newPatientOpenByEvent, setNewPatientOpenByEvent] = useState<
+    Record<string, boolean>
+  >({});
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -469,6 +532,141 @@ export default function CalendarSettingsPage() {
         createError instanceof Error
           ? createError.message
           : "Impossible de créer le rendez-vous"
+      );
+    } finally {
+      setCreatingAppointmentKey(null);
+    }
+  };
+
+  const ensureNewPatientDraft = (key: string, event: CalendarSyncEvent) => {
+    setNewPatientByEvent((current) => {
+      if (current[key]) return current;
+
+      return {
+        ...current,
+        [key]: newPatientDraftFromEvent(event),
+      };
+    });
+  };
+
+  const updateNewPatientDraft = (
+    key: string,
+    event: CalendarSyncEvent,
+    field: keyof NewPatientDraft,
+    value: string
+  ) => {
+    setNewPatientByEvent((current) => ({
+      ...current,
+      [key]: {
+        ...(current[key] || newPatientDraftFromEvent(event)),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleCreatePatientAndAppointmentFromEvent = async (
+    connection: CalendarConnection,
+    event: CalendarSyncEvent
+  ) => {
+    const key = `${connection.id}:${eventKey(event)}`;
+    const draft = newPatientByEvent[key] || newPatientDraftFromEvent(event);
+    const firstName = draft.firstName.trim();
+    const lastName = draft.lastName.trim();
+
+    if (!firstName) {
+      setError("Le prénom du nouveau patient est requis.");
+      setSuccess(null);
+      return;
+    }
+
+    if (!lastName) {
+      setError("Le nom du nouveau patient est requis pour créer le dossier.");
+      setSuccess(null);
+      return;
+    }
+
+    if (!event.startsAt || !event.endsAt) {
+      setError("Impossible de créer un rendez-vous sans date de début et de fin.");
+      setSuccess(null);
+      return;
+    }
+
+    setCreatingAppointmentKey(key);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const patient = await request<Patient>("/api/hugo/patients", {
+        method: "POST",
+        body: JSON.stringify({
+          entityId: connection.entityId,
+          firstName,
+          lastName,
+          phone: draft.phone.trim() || null,
+          email: draft.email.trim() || null,
+          status: "ACTIVE",
+          notes: draft.notes.trim() || null,
+        }),
+      });
+
+      const appointment = await request<{ id: string }>(
+        "/api/hugo/appointments",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            patientId: patient.id,
+            startsAt: event.startsAt,
+            endsAt: event.endsAt,
+            status: "SCHEDULED",
+            source: "APPLE_CALENDAR",
+            notes: [
+              event.uid ? `[Apple Calendar UID:${event.uid}]` : null,
+              `Titre: ${event.summary || "Sans titre"}`,
+              "Validation manuelle depuis Connexion agenda",
+              "Patient créé depuis l'événement Apple Calendar",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          }),
+        }
+      );
+
+      const validatedEvent: CalendarSyncEvent = {
+        ...event,
+        appointmentId: appointment.id,
+        patientName: patientName(patient),
+        confidence: 1,
+        reason: "Patient et rendez-vous créés manuellement.",
+      };
+
+      setPatients((current) => [patient, ...current]);
+      setSyncResults((current) => {
+        const currentResult = current[connection.id];
+        if (!currentResult) return current;
+
+        return {
+          ...current,
+          [connection.id]: {
+            ...currentResult,
+            importedCount: currentResult.importedCount + 1,
+            unmatchedCount: Math.max(0, currentResult.unmatchedCount - 1),
+            unmatchedEvents: currentResult.unmatchedEvents.filter(
+              (item) => eventKey(item) !== eventKey(event)
+            ),
+            recognizedEvents: [
+              validatedEvent,
+              ...currentResult.recognizedEvents,
+            ].slice(0, 50),
+          },
+        };
+      });
+      setNewPatientOpenByEvent((current) => ({ ...current, [key]: false }));
+      setSuccess("Patient et rendez-vous créés.");
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Impossible de créer le patient et le rendez-vous"
       );
     } finally {
       setCreatingAppointmentKey(null);
@@ -837,6 +1035,11 @@ export default function CalendarSettingsPage() {
                             <div className="mt-4 space-y-3">
                               {syncResult.unmatchedEvents.map((event) => {
                                 const key = `${connection.id}:${eventKey(event)}`;
+                                const draft =
+                                  newPatientByEvent[key] ||
+                                  newPatientDraftFromEvent(event);
+                                const isNewPatientOpen =
+                                  newPatientOpenByEvent[key] || false;
 
                                 return (
                                   <div
@@ -865,39 +1068,196 @@ export default function CalendarSettingsPage() {
                                         {confidencePercent(event.confidence)}
                                       </span>
                                     </div>
-                                    <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]">
-                                      <select
-                                        value={selectedPatientByEvent[key] || ""}
-                                        onChange={(inputEvent) =>
-                                          setSelectedPatientByEvent((current) => ({
-                                            ...current,
-                                            [key]: inputEvent.target.value,
-                                          }))
-                                        }
-                                        className={INPUT}
-                                      >
-                                        <option value="">Choisir un patient</option>
-                                        {patients.map((patient) => (
-                                          <option key={patient.id} value={patient.id}>
-                                            {patientName(patient)}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleCreateAppointmentFromEvent(
-                                            connection,
-                                            event
-                                          )
-                                        }
-                                        disabled={creatingAppointmentKey === key}
-                                        className={BUTTON_DARK}
-                                      >
-                                        {creatingAppointmentKey === key
-                                          ? "Création..."
-                                          : "Créer rendez-vous"}
-                                      </button>
+                                    <div className="mt-4 rounded-3xl border border-white/70 bg-white/50 p-3">
+                                      <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                        Patient existant
+                                      </p>
+                                      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+                                        <select
+                                          value={selectedPatientByEvent[key] || ""}
+                                          onChange={(inputEvent) =>
+                                            setSelectedPatientByEvent((current) => ({
+                                              ...current,
+                                              [key]: inputEvent.target.value,
+                                            }))
+                                          }
+                                          className={INPUT}
+                                        >
+                                          <option value="">Choisir un patient</option>
+                                          {patients.map((patient) => (
+                                            <option key={patient.id} value={patient.id}>
+                                              {patientName(patient)}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleCreateAppointmentFromEvent(
+                                              connection,
+                                              event
+                                            )
+                                          }
+                                          disabled={creatingAppointmentKey === key}
+                                          className={BUTTON_DARK}
+                                        >
+                                          {creatingAppointmentKey === key
+                                            ? "Création..."
+                                            : "Créer rendez-vous"}
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    <div className="mt-3 rounded-3xl border border-cyan-100/70 bg-cyan-50/35 p-3">
+                                      <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div>
+                                          <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-cyan-700/55">
+                                            Nouveau patient
+                                          </p>
+                                          <p className="mt-1 text-xs font-medium text-black/42">
+                                            Créer le dossier puis le rendez-vous associé.
+                                          </p>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            ensureNewPatientDraft(key, event);
+                                            setNewPatientOpenByEvent((current) => ({
+                                              ...current,
+                                              [key]: !isNewPatientOpen,
+                                            }));
+                                          }}
+                                          className={BUTTON_LIGHT}
+                                        >
+                                          {isNewPatientOpen
+                                            ? "Masquer"
+                                            : "Nouveau patient"}
+                                        </button>
+                                      </div>
+
+                                      {isNewPatientOpen && (
+                                        <div className="mt-4 space-y-3">
+                                          <div className="grid gap-3 sm:grid-cols-2">
+                                            <label className="block">
+                                              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                                Prénom
+                                              </span>
+                                              <input
+                                                value={draft.firstName}
+                                                onChange={(inputEvent) =>
+                                                  updateNewPatientDraft(
+                                                    key,
+                                                    event,
+                                                    "firstName",
+                                                    inputEvent.target.value
+                                                  )
+                                                }
+                                                className={cn(INPUT, "mt-1.5")}
+                                                placeholder="Prénom"
+                                              />
+                                            </label>
+                                            <label className="block">
+                                              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                                Nom
+                                              </span>
+                                              <input
+                                                value={draft.lastName}
+                                                onChange={(inputEvent) =>
+                                                  updateNewPatientDraft(
+                                                    key,
+                                                    event,
+                                                    "lastName",
+                                                    inputEvent.target.value
+                                                  )
+                                                }
+                                                className={cn(INPUT, "mt-1.5")}
+                                                placeholder="Nom"
+                                              />
+                                            </label>
+                                            <label className="block">
+                                              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                                Téléphone
+                                              </span>
+                                              <input
+                                                value={draft.phone}
+                                                onChange={(inputEvent) =>
+                                                  updateNewPatientDraft(
+                                                    key,
+                                                    event,
+                                                    "phone",
+                                                    inputEvent.target.value
+                                                  )
+                                                }
+                                                className={cn(INPUT, "mt-1.5")}
+                                                placeholder="Optionnel"
+                                              />
+                                            </label>
+                                            <label className="block">
+                                              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                                Email
+                                              </span>
+                                              <input
+                                                type="email"
+                                                value={draft.email}
+                                                onChange={(inputEvent) =>
+                                                  updateNewPatientDraft(
+                                                    key,
+                                                    event,
+                                                    "email",
+                                                    inputEvent.target.value
+                                                  )
+                                                }
+                                                className={cn(INPUT, "mt-1.5")}
+                                                placeholder="Optionnel"
+                                              />
+                                            </label>
+                                          </div>
+                                          <label className="block">
+                                            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                              Note
+                                            </span>
+                                            <textarea
+                                              value={draft.notes}
+                                              onChange={(inputEvent) =>
+                                                updateNewPatientDraft(
+                                                  key,
+                                                  event,
+                                                  "notes",
+                                                  inputEvent.target.value
+                                                )
+                                              }
+                                              className={cn(INPUT, "mt-1.5 min-h-[78px] resize-none")}
+                                              placeholder="Optionnel"
+                                            />
+                                          </label>
+                                          <div className="flex flex-wrap items-center gap-3">
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                handleCreatePatientAndAppointmentFromEvent(
+                                                  connection,
+                                                  event
+                                                )
+                                              }
+                                              disabled={creatingAppointmentKey === key}
+                                              className={BUTTON_DARK}
+                                            >
+                                              {creatingAppointmentKey === key
+                                                ? "Création..."
+                                                : "Créer patient + rendez-vous"}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                router.push("/dashboard/appointments")
+                                              }
+                                              className={BUTTON_LIGHT}
+                                            >
+                                              Voir les rendez-vous
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 );
