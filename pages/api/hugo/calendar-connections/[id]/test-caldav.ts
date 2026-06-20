@@ -48,7 +48,11 @@ const testCalDav = async (
 
   const connection = await prisma.calendarConnection.findFirst({
     where: { id, entityId: cabinet.cabinetId },
-    select: { id: true },
+    select: {
+      id: true,
+      selectedCalendarUrl: true,
+      selectedCalendarName: true,
+    },
   });
 
   if (!connection) {
@@ -77,11 +81,12 @@ const testCalDav = async (
       password,
     });
 
-    const selectedCalendar = calendars[0] || null;
     const capabilities = {
       calendars: calendars.map((calendar) => ({
         name: calendar.name,
         url: calendar.url,
+        color: calendar.color || null,
+        writable: calendar.writable,
       })),
       calendarCount: calendars.length,
       testedAt: new Date().toISOString(),
@@ -94,12 +99,12 @@ const testCalDav = async (
         caldavUrl: normalizedUrl,
         caldavUsername: username,
         caldavPasswordEncrypted: encryptCalDavPassword(password),
-        selectedCalendarUrl: selectedCalendar?.url,
-        selectedCalendarName: selectedCalendar?.name,
         capabilities,
         writeStatus: CalendarWriteStatus.READY,
         lastWriteTestAt: new Date(),
-        writeLastError: null,
+        writeLastError: calendars.length
+          ? null
+          : "Connexion prête, mais aucun calendrier écrivable détecté automatiquement.",
       },
       select: {
         id: true,
@@ -119,6 +124,7 @@ const testCalDav = async (
       lastWriteTestAt: updatedConnection.lastWriteTestAt,
       selectedCalendarUrl: updatedConnection.selectedCalendarUrl,
       selectedCalendarName: updatedConnection.selectedCalendarName,
+      writeLastError: updatedConnection.writeLastError,
       calendars,
     });
   } catch (error) {

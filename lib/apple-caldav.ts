@@ -20,7 +20,12 @@ interface CreateCalDavEventParams {
 export interface DiscoveredCalendar {
   name: string;
   url: string;
+  color?: string | null;
+  writable: boolean;
 }
+
+export const READ_ONLY_APPLE_CALENDAR_URL_MESSAGE =
+  "Cette URL est une URL Apple Calendar publiée en lecture seule. Elle peut servir à importer le calendrier, mais pas à écrire dedans. Utilisez la découverte CalDAV ou sélectionnez un calendrier iCloud détecté.";
 
 export function normalizeCalDavUrl(input: string) {
   const trimmed = input.trim();
@@ -41,6 +46,19 @@ export function normalizeCalDavUrl(input: string) {
   }
 
   return url.toString();
+}
+
+export function isReadOnlyAppleCalendarUrl(input: string) {
+  const trimmed = input.trim().toLowerCase();
+  return trimmed.startsWith("webcal://") || trimmed.includes("/published/2/");
+}
+
+export function assertWritableCalendarUrl(input: string) {
+  if (isReadOnlyAppleCalendarUrl(input)) {
+    throw new Error(READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
+  }
+
+  return normalizeCalDavUrl(input);
 }
 
 const basicAuthHeader = (username: string, password: string) => {
@@ -68,10 +86,34 @@ const formatIcsDate = (value: Date | string) => {
 };
 
 const buildEventUrl = (calendarUrl: string, uid: string) => {
-  const normalizedUrl = normalizeCalDavUrl(calendarUrl);
+  const normalizedUrl = assertWritableCalendarUrl(calendarUrl);
   const baseUrl = normalizedUrl.endsWith("/") ? normalizedUrl : `${normalizedUrl}/`;
 
   return new URL(`${encodeURIComponent(uid)}.ics`, baseUrl).toString();
+};
+
+const ensureTrailingSlash = (value: string) => {
+  return value.endsWith("/") ? value : `${value}/`;
+};
+
+const getResponseBlocks = (xml: string) => {
+  return xml.match(/<[^:>]*:?response[\s\S]*?<\/[^:>]*:?response>/gi) || [];
+};
+
+const getFirstHref = (xml: string) => {
+  return xml.match(/<[^:>]*:?href[^>]*>([\s\S]*?)<\/[^:>]*:?href>/i)?.[1]?.trim() || null;
+};
+
+const getFirstText = (xml: string, tagName: string) => {
+  const pattern = new RegExp(
+    `<[^:>]*:?${tagName}[^>]*>([\\s\\S]*?)<\\/[^:>]*:?${tagName}>`,
+    "i"
+  );
+  return xml.match(pattern)?.[1]?.trim() || null;
+};
+
+const toAbsoluteCalDavUrl = (href: string, baseUrl: string) => {
+  return ensureTrailingSlash(new URL(href, baseUrl).toString());
 };
 
 const caldavRequest = async ({
@@ -130,33 +172,83 @@ export async function discoverCalendars(
   const caldavUrl = normalizeCalDavUrl(params.caldavUrl);
 
   try {
-    const response = await caldavRequest({
+    const principalResponse = await caldavRequest({
       params: { ...params, caldavUrl },
-      depth: "1",
+      depth: "0",
       body: `<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
   <D:prop>
-    <D:displayname/>
-    <C:supported-calendar-component-set/>
+    <D:current-user-principal/>
   </D:prop>
 </D:propfind>`,
     });
-    const xml = await response.text();
+
+    const principalXml = await principalResponse.text();
+    const principalHref = getFirstHref(
+      getFirstText(principalXml, "current-user-principal") || principalXml
+    );
+
+    if (!principalHref) return [];
+
+    const principalUrl = toAbsoluteCalDavUrl(principalHref, principalResponse.url || caldavUrl);
+    const homeSetResponse = await caldavRequest({
+      params: { ...params, caldavUrl: principalUrl },
+      depth: "0",
+      body: `<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <C:calendar-home-set/>
+  </D:prop>
+</D:propfind>`,
+    });
+
+    const homeSetXml = await homeSetResponse.text();
+    const homeSetHref = getFirstHref(
+      getFirstText(homeSetXml, "calendar-home-set") || homeSetXml
+    );
+
+    if (!homeSetHref) return [];
+
+    const homeSetUrl = toAbsoluteCalDavUrl(homeSetHref, homeSetResponse.url || principalUrl);
+    const calendarsResponse = await caldavRequest({
+      params: { ...params, caldavUrl: homeSetUrl },
+      depth: "1",
+      body: `<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">
+  <D:prop>
+    <D:displayname/>
+    <D:resourcetype/>
+    <D:current-user-privilege-set/>
+    <C:supported-calendar-component-set/>
+    <A:calendar-color/>
+  </D:prop>
+</D:propfind>`,
+    });
+
+    const xml = await calendarsResponse.text();
     const calendars: DiscoveredCalendar[] = [];
-    const responseBlocks = xml.match(/<[^:>]*:?response[\s\S]*?<\/[^:>]*:?response>/gi) || [];
 
-    for (const block of responseBlocks) {
-      if (!/VEVENT/i.test(block)) continue;
+    for (const block of getResponseBlocks(xml)) {
+      const resourceType = getFirstText(block, "resourcetype") || "";
+      const supportedComponents =
+        getFirstText(block, "supported-calendar-component-set") || "";
+      const hasCalendarResource = /:?calendar\b/i.test(resourceType);
+      const supportsEvents = /VEVENT/i.test(supportedComponents) || !supportedComponents;
 
-      const href = block.match(/<[^:>]*:?href[^>]*>([\s\S]*?)<\/[^:>]*:?href>/i)?.[1]?.trim();
-      const displayName =
-        block.match(/<[^:>]*:?displayname[^>]*>([\s\S]*?)<\/[^:>]*:?displayname>/i)?.[1]?.trim() ||
-        "Calendrier Apple";
+      if (!hasCalendarResource || !supportsEvents) continue;
 
+      const href = getFirstHref(block);
       if (!href) continue;
 
-      const url = new URL(href, caldavUrl).toString();
-      calendars.push({ name: displayName, url });
+      const url = toAbsoluteCalDavUrl(href, calendarsResponse.url || homeSetUrl);
+      if (isReadOnlyAppleCalendarUrl(url)) continue;
+
+      const displayName = getFirstText(block, "displayname") || "Calendrier Apple";
+      const color = getFirstText(block, "calendar-color");
+      const privileges = getFirstText(block, "current-user-privilege-set") || "";
+      const writable = /<[^:>]*:?write\b/i.test(privileges) || privileges === "";
+
+      calendars.push({ name: displayName, url, color, writable });
     }
 
     return calendars;

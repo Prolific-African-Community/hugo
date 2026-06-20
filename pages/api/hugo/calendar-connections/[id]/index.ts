@@ -4,6 +4,10 @@ import {
   CalendarWriteStatus,
 } from "@prisma/client";
 import type { NextApiResponse } from "next";
+import {
+  isReadOnlyAppleCalendarUrl,
+  READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
+} from "../../../../../lib/apple-caldav";
 import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
 import { requireHugoCabinet } from "../../../../../lib/hugo-auth";
@@ -130,6 +134,15 @@ const validateCalendarUrl = (value: string) => {
   }
 };
 
+const validateWritableCalendarUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
 const updateCalendarConnection = async (
   req: AuthenticatedNextApiRequest,
   res: NextApiResponse
@@ -195,11 +208,15 @@ const updateCalendarConnection = async (
     return jsonError(res, 400, "A valid writeStatus is required");
   }
 
-  if (selectedCalendarUrl && !validateCalendarUrl(selectedCalendarUrl)) {
+  if (selectedCalendarUrl && isReadOnlyAppleCalendarUrl(selectedCalendarUrl)) {
+    return jsonError(res, 400, READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
+  }
+
+  if (selectedCalendarUrl && !validateWritableCalendarUrl(selectedCalendarUrl)) {
     return jsonError(
       res,
       400,
-      "selectedCalendarUrl must be a valid https or webcal URL"
+      "selectedCalendarUrl must be a valid https URL"
     );
   }
 

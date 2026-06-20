@@ -9,6 +9,8 @@ import type { NextApiResponse } from "next";
 import {
   createCalDavEvent,
   decryptCalDavPassword,
+  isReadOnlyAppleCalendarUrl,
+  READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
 } from "../../../../../lib/apple-caldav";
 import { jsonSuccess } from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
@@ -153,6 +155,10 @@ const pushCalendarSyncAction = async (
       400,
       "Aucun calendrier cible Apple Calendar sélectionné. Sélectionnez un calendrier cible avant de pousser l’événement."
     );
+  }
+
+  if (isReadOnlyAppleCalendarUrl(connection.selectedCalendarUrl)) {
+    return readableError(res, 400, READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
   }
 
   await prisma.calendarSyncAction.update({

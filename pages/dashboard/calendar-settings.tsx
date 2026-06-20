@@ -50,6 +50,8 @@ interface CalendarConnectionForm {
 interface CalDavCalendar {
   name: string;
   url: string;
+  color?: string | null;
+  writable?: boolean;
 }
 
 interface CalendarCapabilities {
@@ -69,6 +71,7 @@ interface CalDavTestResult {
   writeEnabled: boolean;
   writeStatus: CalendarWriteStatus;
   lastWriteTestAt?: string | null;
+  writeLastError?: string | null;
   selectedCalendarUrl?: string | null;
   selectedCalendarName?: string | null;
   calendars: CalDavCalendar[];
@@ -163,6 +166,14 @@ const emptyForm = (): CalendarConnectionForm => ({
   name: "Apple Calendar",
   calendarUrl: "",
 });
+
+const READ_ONLY_APPLE_CALENDAR_URL_MESSAGE =
+  "Cette URL est une URL Apple Calendar publiée en lecture seule. Elle peut servir à importer le calendrier, mais pas à écrire dedans. Utilisez la découverte CalDAV ou sélectionnez un calendrier iCloud détecté.";
+
+const isReadOnlyAppleCalendarUrl = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("webcal://") || normalized.includes("/published/2/");
+};
 
 function Icon({
   name,
@@ -609,7 +620,7 @@ export default function CalendarSettingsPage() {
                 ...item,
                 writeEnabled: result.writeEnabled,
                 writeStatus: result.writeStatus,
-                writeLastError: null,
+                writeLastError: result.writeLastError || null,
                 lastWriteTestAt: result.lastWriteTestAt,
                 caldavUrl: formState.caldavUrl,
                 caldavUsername: formState.username,
@@ -633,7 +644,11 @@ export default function CalendarSettingsPage() {
             result.selectedCalendarUrl || formState.targetCalendarUrl,
         },
       }));
-      setSuccess("Connexion CalDAV prête pour l'écriture future.");
+      setSuccess(
+        result.calendars.length
+          ? "Connexion CalDAV prête. Sélectionnez le calendrier cible."
+          : "Connexion CalDAV prête, mais aucun calendrier écrivable n'a été détecté automatiquement."
+      );
     } catch (testError) {
       setError(
         testError instanceof Error
@@ -705,9 +720,16 @@ export default function CalendarSettingsPage() {
       return;
     }
 
+    if (isReadOnlyAppleCalendarUrl(targetCalendarUrl)) {
+      setError(READ_ONLY_APPLE_CALENDAR_URL_MESSAGE);
+      setSuccess(null);
+      return;
+    }
+
     await handleSelectWriteCalendar(connection, {
       name: "Calendrier Apple Calendar",
       url: targetCalendarUrl,
+      writable: true,
     });
   };
 
@@ -1395,9 +1417,21 @@ export default function CalendarSettingsPage() {
                           >
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                               <div>
-                                <p className="text-sm font-semibold tracking-[-0.02em]">
-                                  {calendar.name}
-                                </p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {calendar.color && (
+                                    <span
+                                      className="h-3 w-3 rounded-full border border-white/80"
+                                      style={{ backgroundColor: calendar.color }}
+                                      aria-hidden="true"
+                                    />
+                                  )}
+                                  <p className="text-sm font-semibold tracking-[-0.02em]">
+                                    {calendar.name}
+                                  </p>
+                                  <span className="rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#5f7f68]">
+                                    Écrivable
+                                  </span>
+                                </div>
                                 <p className="mt-1 break-all text-xs font-medium text-black/38">
                                   {calendar.url}
                                 </p>
@@ -1436,6 +1470,10 @@ export default function CalendarSettingsPage() {
                       <p className="mt-2 text-xs font-medium leading-5 text-black/45">
                         Utilisez l'URL CalDAV exacte du calendrier iCloud dans
                         lequel Hugo doit écrire.
+                      </p>
+                      <p className="mt-2 rounded-2xl border border-[#f3ddd7]/70 bg-white/55 px-3 py-2 text-xs font-semibold leading-5 text-[#9a6657]">
+                        N'utilisez pas l'URL webcal/published .ics. Elle est
+                        lecture seule et ne peut pas recevoir d'événements.
                       </p>
                       <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
                         <input
