@@ -1,4 +1,8 @@
-import { TherapySessionStatus } from "@prisma/client";
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  TherapySessionStatus,
+} from "@prisma/client";
 import type { NextApiResponse } from "next";
 import {
   getOptionalString,
@@ -7,6 +11,11 @@ import {
   jsonSuccess,
 } from "../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
+import {
+  APPOINTMENT_OVERLAP_MESSAGE,
+  findAppointmentOverlap,
+  getDefaultAppointmentEnd,
+} from "../../../../lib/hugo-appointments";
 import { requireHugoCabinet } from "../../../../lib/hugo-auth";
 import { prisma } from "../../../../lib/prisma";
 
@@ -14,6 +23,7 @@ interface SessionBody {
   entityId?: unknown;
   patientId?: unknown;
   prescriptionId?: unknown;
+  appointmentId?: unknown;
   sessionNumber?: unknown;
   scheduledAt?: unknown;
   completedAt?: unknown;
@@ -36,6 +46,15 @@ const sessionInclude = {
       prescribedSessions: true,
       completedSessions: true,
       status: true,
+    },
+  },
+  appointment: {
+    select: {
+      id: true,
+      startsAt: true,
+      endsAt: true,
+      status: true,
+      source: true,
     },
   },
 };
@@ -173,6 +192,7 @@ const createSession = async (
   const entityId = getOptionalString(body.entityId);
   const patientId = getOptionalString(body.patientId);
   const prescriptionId = getOptionalString(body.prescriptionId);
+  const appointmentId = getOptionalString(body.appointmentId);
   const sessionNumber = parseRequiredPositiveInteger(body.sessionNumber);
   const scheduledAt = parseNullableDate(body.scheduledAt);
   const completedAt = parseNullableDate(body.completedAt);
@@ -258,18 +278,78 @@ const createSession = async (
     );
   }
 
-  const session = await prisma.therapySession.create({
-    data: {
-      entityId,
-      patientId,
-      prescriptionId,
-      sessionNumber,
-      scheduledAt,
-      completedAt,
-      status,
-      notes: getNullableString(body.notes),
-    },
-    include: sessionInclude,
+  let linkedAppointmentId = appointmentId || null;
+
+  if (appointmentId) {
+    const appointment = await prisma.appointment.findFirst({
+      where: {
+        id: appointmentId,
+        entityId,
+        patientId,
+      },
+      select: { id: true },
+    });
+
+    if (!appointment) {
+      return jsonError(res, 404, "Appointment not found");
+    }
+
+    const existingLinkedSession = await prisma.therapySession.findUnique({
+      where: { appointmentId },
+      select: { id: true },
+    });
+
+    if (existingLinkedSession) {
+      return jsonError(res, 409, "Appointment already has a session");
+    }
+  }
+
+  if (scheduledAt && !appointmentId) {
+    const appointmentEndsAt = getDefaultAppointmentEnd(scheduledAt);
+    const overlap = await findAppointmentOverlap({
+      cabinetId: entityId,
+      startsAt: scheduledAt,
+      endsAt: appointmentEndsAt,
+    });
+
+    if (overlap) {
+      return jsonError(res, 409, APPOINTMENT_OVERLAP_MESSAGE);
+    }
+  }
+
+  const session = await prisma.$transaction(async (tx) => {
+    const createdAppointment =
+      scheduledAt && !appointmentId
+        ? await tx.appointment.create({
+            data: {
+              entityId,
+              patientId,
+              startsAt: scheduledAt,
+              endsAt: getDefaultAppointmentEnd(scheduledAt),
+              status: AppointmentStatus.SCHEDULED,
+              source: AppointmentSource.MANUAL,
+              notes: "Créé depuis séance",
+            },
+            select: { id: true },
+          })
+        : null;
+
+    linkedAppointmentId = appointmentId || createdAppointment?.id || null;
+
+    return tx.therapySession.create({
+      data: {
+        entityId,
+        patientId,
+        prescriptionId,
+        appointmentId: linkedAppointmentId,
+        sessionNumber,
+        scheduledAt,
+        completedAt,
+        status,
+        notes: getNullableString(body.notes),
+      },
+      include: sessionInclude,
+    });
   });
 
   await recomputePrescriptionCompletedSessions(

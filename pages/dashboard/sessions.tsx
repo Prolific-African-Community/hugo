@@ -439,7 +439,11 @@ export default function SessionsDashboardPage() {
           body: JSON.stringify(payload),
         });
         setSessions((current) => [created, ...current]);
-        setSuccess("Seance creee.");
+        setSuccess(
+          created.scheduledAt
+            ? "Séance créée et ajoutée à l’agenda."
+            : "Seance creee."
+        );
       }
 
       await loadWorkspaceData(activeEntityId);

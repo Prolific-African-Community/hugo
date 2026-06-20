@@ -1,4 +1,8 @@
-import { TherapySessionStatus } from "@prisma/client";
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  TherapySessionStatus,
+} from "@prisma/client";
 import type { NextApiResponse } from "next";
 import {
   getOptionalString,
@@ -7,6 +11,11 @@ import {
   jsonSuccess,
 } from "../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../lib/auth";
+import {
+  APPOINTMENT_OVERLAP_MESSAGE,
+  findAppointmentOverlap,
+  getDefaultAppointmentEnd,
+} from "../../../../lib/hugo-appointments";
 import { requireHugoCabinet } from "../../../../lib/hugo-auth";
 import { prisma } from "../../../../lib/prisma";
 
@@ -36,6 +45,15 @@ const sessionInclude = {
       prescribedSessions: true,
       completedSessions: true,
       status: true,
+    },
+  },
+  appointment: {
+    select: {
+      id: true,
+      startsAt: true,
+      endsAt: true,
+      status: true,
+      source: true,
     },
   },
 };
@@ -198,7 +216,9 @@ const updateSession = async (
       id: true,
       patientId: true,
       prescriptionId: true,
+      appointmentId: true,
       sessionNumber: true,
+      scheduledAt: true,
     },
   });
 
@@ -263,20 +283,82 @@ const updateSession = async (
     );
   }
 
-  const session = await prisma.therapySession.update({
-    where: { id },
-    data: {
-      ...(patientId ? { patientId: nextPatientId } : {}),
-      ...(prescriptionId ? { prescriptionId: nextPrescriptionId } : {}),
-      ...(sessionNumber !== undefined ? { sessionNumber } : {}),
-      ...(scheduledAt !== undefined ? { scheduledAt } : {}),
-      ...(completedAt !== undefined ? { completedAt } : {}),
-      ...(status !== undefined ? { status } : {}),
-      ...(getNullableString(body.notes) !== undefined
-        ? { notes: getNullableString(body.notes) }
-        : {}),
-    },
-    include: sessionInclude,
+  let linkedAppointmentId = existingSession.appointmentId;
+  const shouldSyncAppointment = scheduledAt !== undefined && Boolean(scheduledAt);
+
+  if (shouldSyncAppointment && scheduledAt) {
+    const appointmentEndsAt = getDefaultAppointmentEnd(scheduledAt);
+    const overlap = await findAppointmentOverlap({
+      cabinetId: entityId,
+      startsAt: scheduledAt,
+      endsAt: appointmentEndsAt,
+      excludeAppointmentId: existingSession.appointmentId,
+    });
+
+    if (overlap) {
+      return jsonError(res, 409, APPOINTMENT_OVERLAP_MESSAGE);
+    }
+  }
+
+  const nextNotes = getNullableString(body.notes);
+
+  const session = await prisma.$transaction(async (tx) => {
+    if (shouldSyncAppointment && scheduledAt) {
+      if (existingSession.appointmentId) {
+        await tx.appointment.updateMany({
+          where: {
+            id: existingSession.appointmentId,
+            entityId,
+          },
+          data: {
+            patientId: nextPatientId,
+            startsAt: scheduledAt,
+            endsAt: getDefaultAppointmentEnd(scheduledAt),
+          },
+        });
+      } else {
+        const appointment = await tx.appointment.create({
+          data: {
+            entityId,
+            patientId: nextPatientId,
+            startsAt: scheduledAt,
+            endsAt: getDefaultAppointmentEnd(scheduledAt),
+            status: AppointmentStatus.SCHEDULED,
+            source: AppointmentSource.MANUAL,
+            notes: "Créé depuis séance",
+          },
+          select: { id: true },
+        });
+        linkedAppointmentId = appointment.id;
+      }
+    } else if (existingSession.appointmentId && patientId) {
+      await tx.appointment.updateMany({
+        where: {
+          id: existingSession.appointmentId,
+          entityId,
+        },
+        data: {
+          patientId: nextPatientId,
+        },
+      });
+    }
+
+    return tx.therapySession.update({
+      where: { id },
+      data: {
+        ...(patientId ? { patientId: nextPatientId } : {}),
+        ...(prescriptionId ? { prescriptionId: nextPrescriptionId } : {}),
+        ...(linkedAppointmentId !== existingSession.appointmentId
+          ? { appointmentId: linkedAppointmentId }
+          : {}),
+        ...(sessionNumber !== undefined ? { sessionNumber } : {}),
+        ...(scheduledAt !== undefined ? { scheduledAt } : {}),
+        ...(completedAt !== undefined ? { completedAt } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(nextNotes !== undefined ? { notes: nextNotes } : {}),
+      },
+      include: sessionInclude,
+    });
   });
 
   const prescriptionsToRecompute = new Set<string>();
@@ -324,7 +406,7 @@ const deleteSession = async (
 
   const existingSession = await prisma.therapySession.findFirst({
     where: { id, entityId },
-    select: { id: true, prescriptionId: true },
+    select: { id: true, appointmentId: true, prescriptionId: true },
   });
 
   if (!existingSession) {
@@ -332,6 +414,30 @@ const deleteSession = async (
   }
 
   await prisma.therapySession.delete({ where: { id } });
+
+  if (existingSession.appointmentId) {
+    const appointment = await prisma.appointment.findFirst({
+      where: {
+        id: existingSession.appointmentId,
+        entityId,
+      },
+      select: {
+        id: true,
+        notes: true,
+      },
+    });
+
+    if (appointment && !appointment.notes?.includes("Séance supprimée")) {
+      await prisma.appointment.update({
+        where: { id: appointment.id },
+        data: {
+          notes: [appointment.notes, "Séance supprimée"]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      });
+    }
+  }
 
   if (existingSession.prescriptionId) {
     await recomputePrescriptionCompletedSessions(
