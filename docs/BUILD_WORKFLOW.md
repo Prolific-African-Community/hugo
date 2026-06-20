@@ -63,6 +63,51 @@ Ne pas :
 4. UX claire
 5. Fonctionnalites utiles au kine
 
+## Regles de build - Module Rendez-vous / Calendrier
+
+Avant chaque run lie a `Appointment`, `TherapySession`, `CalendarConnection`, Apple Calendar ou au planning, Codex doit verifier :
+
+1. Le changement respecte-t-il le modele suivant ?
+   - `CalendarEvent` externe
+   - `Appointment`
+   - `TherapySession`
+   - `Prescription`
+   - CNS tracking
+2. Le changement renforce-t-il le cockpit agenda comme interface principale du praticien ?
+3. Le changement evite-t-il les sources de verite concurrentes ?
+4. Le changement evite-t-il de stocker de la logique technique dans les notes visibles ?
+5. Le changement evite-t-il une desynchronisation Apple Calendar / Hugo ?
+6. Le changement prepare-t-il le futur bidirectionnel au lieu de creer un bricolage local ?
+7. Le changement est-il compatible avec la roadmap ?
+   - Calendar Sync Foundation
+   - Apple Calendar Write
+   - Cockpit Agenda
+   - Drag & Drop
+   - Assistant planning
+
+Priorite produit pour le planning :
+1. Coherence calendrier / `Appointment`
+2. Synchronisation externe fiable
+3. Vue cockpit agenda
+4. Actions rapides praticien
+5. Intelligence / automatisation
+
+Regle de blocage :
+Ne pas implementer de drag & drop, deplacement automatique ou modification locale d'evenement externe sans :
+- mapping externe propre
+- queue de synchronisation
+- strategie de push externe
+- gestion minimale des conflits ou erreurs
+
+Regle de prompt :
+Chaque futur prompt Codex lie au planning doit preciser :
+- source concernee : `MANUAL`, `APPLE_CALENDAR`, `DOCTENA`
+- effet attendu cote `Appointment`
+- effet attendu cote `TherapySession`
+- effet attendu cote calendrier externe
+- risque de desynchronisation
+- validation build obligatoire
+
 ## Workflow de validation
 
 Apres chaque run :
