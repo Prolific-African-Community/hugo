@@ -1,4 +1,4 @@
-import { CalendarConnectionStatus } from "@prisma/client";
+import { CalendarConnectionStatus, CalendarWriteStatus } from "@prisma/client";
 import type { NextApiResponse } from "next";
 import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
@@ -9,6 +9,10 @@ interface CalendarConnectionUpdateBody {
   name?: unknown;
   calendarUrl?: unknown;
   status?: unknown;
+  selectedCalendarUrl?: unknown;
+  selectedCalendarName?: unknown;
+  writeEnabled?: unknown;
+  writeStatus?: unknown;
 }
 
 const calendarConnectionSelect = {
@@ -18,6 +22,15 @@ const calendarConnectionSelect = {
   name: true,
   calendarUrl: true,
   status: true,
+  writeEnabled: true,
+  caldavUrl: true,
+  caldavUsername: true,
+  selectedCalendarUrl: true,
+  selectedCalendarName: true,
+  capabilities: true,
+  lastWriteTestAt: true,
+  writeStatus: true,
+  writeLastError: true,
   lastSyncedAt: true,
   lastError: true,
   createdAt: true,
@@ -50,6 +63,23 @@ const parseConnectionStatus = (
     )
     ? (value as CalendarConnectionStatus)
     : null;
+};
+
+const parseWriteStatus = (
+  value: unknown
+): CalendarWriteStatus | undefined | null => {
+  if (value === undefined) return undefined;
+
+  return typeof value === "string" &&
+    Object.values(CalendarWriteStatus).includes(value as CalendarWriteStatus)
+    ? (value as CalendarWriteStatus)
+    : null;
+};
+
+const parseOptionalBoolean = (value: unknown) => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") return null;
+  return value;
 };
 
 const validateCalendarUrl = (value: string) => {
@@ -88,7 +118,11 @@ const updateCalendarConnection = async (
   const body = req.body as CalendarConnectionUpdateBody;
   const name = getOptionalString(body.name);
   const calendarUrl = getOptionalString(body.calendarUrl);
+  const selectedCalendarUrl = getOptionalString(body.selectedCalendarUrl);
+  const selectedCalendarName = getOptionalString(body.selectedCalendarName);
+  const writeEnabled = parseOptionalBoolean(body.writeEnabled);
   const status = parseConnectionStatus(body.status);
+  const writeStatus = parseWriteStatus(body.writeStatus);
 
   if (name === null) {
     return jsonError(res, 400, "name cannot be empty");
@@ -96,6 +130,14 @@ const updateCalendarConnection = async (
 
   if (calendarUrl === null) {
     return jsonError(res, 400, "calendarUrl cannot be empty");
+  }
+
+  if (selectedCalendarUrl === null) {
+    return jsonError(res, 400, "selectedCalendarUrl cannot be empty");
+  }
+
+  if (selectedCalendarName === null) {
+    return jsonError(res, 400, "selectedCalendarName cannot be empty");
   }
 
   if (calendarUrl && !validateCalendarUrl(calendarUrl)) {
@@ -106,11 +148,40 @@ const updateCalendarConnection = async (
     return jsonError(res, 400, "A valid status is required");
   }
 
+  if (writeEnabled === null) {
+    return jsonError(res, 400, "writeEnabled must be a boolean");
+  }
+
+  if (writeStatus === null) {
+    return jsonError(res, 400, "A valid writeStatus is required");
+  }
+
+  if (selectedCalendarUrl && !validateCalendarUrl(selectedCalendarUrl)) {
+    return jsonError(
+      res,
+      400,
+      "selectedCalendarUrl must be a valid https or webcal URL"
+    );
+  }
+
+  const shouldDisableWrite =
+    writeEnabled === false || writeStatus === CalendarWriteStatus.DISABLED;
+
   const connection = await prisma.calendarConnection.update({
     where: { id },
     data: {
       ...(name !== undefined ? { name } : {}),
       ...(calendarUrl !== undefined ? { calendarUrl } : {}),
+      ...(selectedCalendarUrl !== undefined ? { selectedCalendarUrl } : {}),
+      ...(selectedCalendarName !== undefined ? { selectedCalendarName } : {}),
+      ...(writeEnabled !== undefined ? { writeEnabled } : {}),
+      ...(writeStatus !== undefined ? { writeStatus } : {}),
+      ...(shouldDisableWrite
+        ? { writeEnabled: false, writeStatus: CalendarWriteStatus.DISABLED }
+        : {}),
+      ...(writeStatus !== undefined && writeStatus !== "ERROR"
+        ? { writeLastError: null }
+        : {}),
       ...(status !== undefined ? { status } : {}),
       ...(status !== undefined && status !== "ERROR" ? { lastError: null } : {}),
     },

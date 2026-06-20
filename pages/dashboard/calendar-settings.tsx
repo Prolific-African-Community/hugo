@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 
 type CalendarProvider = "APPLE_CALENDAR";
 type CalendarConnectionStatus = "CONNECTED" | "DISCONNECTED" | "ERROR";
+type CalendarWriteStatus = "NOT_CONFIGURED" | "READY" | "ERROR" | "DISABLED";
 
 interface ApiResponse<T> {
   success: boolean;
@@ -17,6 +18,15 @@ interface CalendarConnection {
   name: string;
   calendarUrl: string;
   status: CalendarConnectionStatus;
+  writeEnabled: boolean;
+  caldavUrl?: string | null;
+  caldavUsername?: string | null;
+  selectedCalendarUrl?: string | null;
+  selectedCalendarName?: string | null;
+  capabilities?: CalendarCapabilities | null;
+  lastWriteTestAt?: string | null;
+  writeStatus: CalendarWriteStatus;
+  writeLastError?: string | null;
   lastSyncedAt?: string | null;
   lastError?: string | null;
   createdAt: string;
@@ -26,6 +36,32 @@ interface CalendarConnection {
 interface CalendarConnectionForm {
   name: string;
   calendarUrl: string;
+}
+
+interface CalDavCalendar {
+  name: string;
+  url: string;
+}
+
+interface CalendarCapabilities {
+  calendars?: CalDavCalendar[];
+  calendarCount?: number;
+  testedAt?: string;
+}
+
+interface CalDavForm {
+  caldavUrl: string;
+  username: string;
+  password: string;
+}
+
+interface CalDavTestResult {
+  writeEnabled: boolean;
+  writeStatus: CalendarWriteStatus;
+  lastWriteTestAt?: string | null;
+  selectedCalendarUrl?: string | null;
+  selectedCalendarName?: string | null;
+  calendars: CalDavCalendar[];
 }
 
 interface Patient {
@@ -167,6 +203,33 @@ function statusTone(status: CalendarConnectionStatus) {
   return "border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]";
 }
 
+function writeStatusLabel(status: CalendarWriteStatus) {
+  const labels: Record<CalendarWriteStatus, string> = {
+    NOT_CONFIGURED: "Non configurée",
+    READY: "Prête",
+    ERROR: "Erreur",
+    DISABLED: "Désactivée",
+  };
+
+  return labels[status];
+}
+
+function writeStatusTone(status: CalendarWriteStatus) {
+  if (status === "READY") {
+    return "border-[#dbead7]/80 bg-[#f0f8ee]/75 text-[#5f7f68]";
+  }
+
+  if (status === "ERROR") {
+    return "border-[#f3ddd7]/80 bg-[#fff1ed]/80 text-[#9a6657]";
+  }
+
+  if (status === "DISABLED") {
+    return "border-black/10 bg-white/50 text-black/45";
+  }
+
+  return "border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]";
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "Jamais";
 
@@ -254,6 +317,12 @@ function newPatientDraftFromEvent(event: CalendarSyncEvent): NewPatientDraft {
   };
 }
 
+function calendarsFromConnection(connection: CalendarConnection) {
+  return Array.isArray(connection.capabilities?.calendars)
+    ? connection.capabilities.calendars
+    : [];
+}
+
 export default function CalendarSettingsPage() {
   const router = useRouter();
   const [connections, setConnections] = useState<CalendarConnection[]>([]);
@@ -262,9 +331,18 @@ export default function CalendarSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [testingCalDavId, setTestingCalDavId] = useState<string | null>(null);
+  const [selectingCalendarKey, setSelectingCalendarKey] = useState<
+    string | null
+  >(null);
   const [syncResults, setSyncResults] = useState<Record<string, CalendarSyncResult>>(
     {}
   );
+  const [caldavFormByConnection, setCaldavFormByConnection] = useState<
+    Record<string, CalDavForm>
+  >({});
+  const [discoveredCalendarsByConnection, setDiscoveredCalendarsByConnection] =
+    useState<Record<string, CalDavCalendar[]>>({});
   const [selectedPatientByEvent, setSelectedPatientByEvent] = useState<
     Record<string, string>
   >({});
@@ -342,6 +420,31 @@ export default function CalendarSettingsPage() {
     }
   };
 
+  const getCalDavForm = (connection: CalendarConnection): CalDavForm => {
+    return (
+      caldavFormByConnection[connection.id] || {
+        caldavUrl: connection.caldavUrl || "",
+        username: connection.caldavUsername || "",
+        password: "",
+      }
+    );
+  };
+
+  const updateCalDavForm = (
+    connection: CalendarConnection,
+    field: keyof CalDavForm,
+    value: string
+  ) => {
+    setCaldavFormByConnection((current) => ({
+      ...current,
+      [connection.id]: {
+        ...getCalDavForm(connection),
+        ...current[connection.id],
+        [field]: value,
+      },
+    }));
+  };
+
   useEffect(() => {
     if (!router.isReady) return;
     loadConnections();
@@ -403,6 +506,156 @@ export default function CalendarSettingsPage() {
         updateError instanceof Error
           ? updateError.message
           : "Impossible de mettre à jour la connexion"
+      );
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleTestCalDav = async (connection: CalendarConnection) => {
+    const formState = getCalDavForm(connection);
+
+    if (!formState.caldavUrl.trim() || !formState.username.trim()) {
+      setError("URL CalDAV et identifiant iCloud requis.");
+      setSuccess(null);
+      return;
+    }
+
+    if (!formState.password.trim()) {
+      setError("Mot de passe spécifique à l'app requis pour le test.");
+      setSuccess(null);
+      return;
+    }
+
+    setTestingCalDavId(connection.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const result = await request<CalDavTestResult>(
+        `/api/hugo/calendar-connections/${connection.id}/test-caldav`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            caldavUrl: formState.caldavUrl,
+            username: formState.username,
+            password: formState.password,
+          }),
+        }
+      );
+
+      setDiscoveredCalendarsByConnection((current) => ({
+        ...current,
+        [connection.id]: result.calendars,
+      }));
+      setConnections((current) =>
+        current.map((item) =>
+          item.id === connection.id
+            ? {
+                ...item,
+                writeEnabled: result.writeEnabled,
+                writeStatus: result.writeStatus,
+                writeLastError: null,
+                lastWriteTestAt: result.lastWriteTestAt,
+                caldavUrl: formState.caldavUrl,
+                caldavUsername: formState.username,
+                selectedCalendarUrl: result.selectedCalendarUrl,
+                selectedCalendarName: result.selectedCalendarName,
+                capabilities: {
+                  calendars: result.calendars,
+                  calendarCount: result.calendars.length,
+                },
+              }
+            : item
+        )
+      );
+      setCaldavFormByConnection((current) => ({
+        ...current,
+        [connection.id]: {
+          caldavUrl: formState.caldavUrl,
+          username: formState.username,
+          password: "",
+        },
+      }));
+      setSuccess("Connexion CalDAV prête pour l'écriture future.");
+    } catch (testError) {
+      setError(
+        testError instanceof Error
+          ? testError.message
+          : "Impossible de tester la connexion CalDAV"
+      );
+      await loadConnections();
+    } finally {
+      setTestingCalDavId(null);
+    }
+  };
+
+  const handleSelectWriteCalendar = async (
+    connection: CalendarConnection,
+    calendar: CalDavCalendar
+  ) => {
+    const key = `${connection.id}:${calendar.url}`;
+    setSelectingCalendarKey(key);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const updatedConnection = await request<CalendarConnection>(
+        `/api/hugo/calendar-connections/${connection.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            selectedCalendarUrl: calendar.url,
+            selectedCalendarName: calendar.name,
+          }),
+        }
+      );
+
+      setConnections((current) =>
+        current.map((item) =>
+          item.id === updatedConnection.id ? updatedConnection : item
+        )
+      );
+      setSuccess("Calendrier cible Apple Calendar sélectionné.");
+    } catch (selectError) {
+      setError(
+        selectError instanceof Error
+          ? selectError.message
+          : "Impossible de sélectionner ce calendrier"
+      );
+    } finally {
+      setSelectingCalendarKey(null);
+    }
+  };
+
+  const handleDisableCalDav = async (connection: CalendarConnection) => {
+    setUpdatingId(connection.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const updatedConnection = await request<CalendarConnection>(
+        `/api/hugo/calendar-connections/${connection.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            writeEnabled: false,
+            writeStatus: "DISABLED",
+          }),
+        }
+      );
+
+      setConnections((current) =>
+        current.map((item) =>
+          item.id === updatedConnection.id ? updatedConnection : item
+        )
+      );
+      setSuccess("Écriture Apple Calendar désactivée.");
+    } catch (disableError) {
+      setError(
+        disableError instanceof Error
+          ? disableError.message
+          : "Impossible de désactiver l'écriture Apple Calendar"
       );
     } finally {
       setUpdatingId(null);
@@ -868,6 +1121,10 @@ export default function CalendarSettingsPage() {
               <div className="divide-y divide-black/5">
                 {connections.map((connection) => {
                   const syncResult = syncResults[connection.id];
+                  const caldavForm = getCalDavForm(connection);
+                  const discoveredCalendars =
+                    discoveredCalendarsByConnection[connection.id] ||
+                    calendarsFromConnection(connection);
 
                   return (
                   <div key={connection.id} className="px-5 py-5">
@@ -944,6 +1201,184 @@ export default function CalendarSettingsPage() {
                         </button>
                       </div>
                     </div>
+
+                    <div className="mt-4 rounded-3xl border border-cyan-100/70 bg-cyan-50/35 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                            Écriture Apple Calendar
+                          </p>
+                          <h3 className="mt-1 text-lg font-semibold tracking-[-0.035em]">
+                            Préparer CalDAV / iCloud
+                          </h3>
+                          <p className="mt-2 max-w-2xl text-xs font-medium leading-5 text-black/45">
+                            Utilisez un mot de passe spécifique à l'app iCloud.
+                            Hugo ne doit jamais utiliser le mot de passe
+                            principal Apple ID.
+                          </p>
+                        </div>
+                        <span
+                          className={cn(
+                            "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                            writeStatusTone(connection.writeStatus)
+                          )}
+                        >
+                          {writeStatusLabel(connection.writeStatus)}
+                        </span>
+                      </div>
+
+                      {connection.writeLastError && (
+                        <p className="mt-3 rounded-2xl border border-[#f3ddd7]/80 bg-[#fff1ed]/80 px-4 py-3 text-xs font-semibold leading-5 text-[#9a6657]">
+                          {connection.writeLastError}
+                        </p>
+                      )}
+
+                      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                        <label className="block">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                            URL CalDAV
+                          </span>
+                          <input
+                            value={caldavForm.caldavUrl}
+                            onChange={(inputEvent) =>
+                              updateCalDavForm(
+                                connection,
+                                "caldavUrl",
+                                inputEvent.target.value
+                              )
+                            }
+                            className={cn(INPUT, "mt-1.5")}
+                            placeholder="https://caldav.icloud.com/..."
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                            Identifiant Apple
+                          </span>
+                          <input
+                            value={caldavForm.username}
+                            onChange={(inputEvent) =>
+                              updateCalDavForm(
+                                connection,
+                                "username",
+                                inputEvent.target.value
+                              )
+                            }
+                            className={cn(INPUT, "mt-1.5")}
+                            placeholder="email iCloud"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                            Mot de passe d'app
+                          </span>
+                          <input
+                            type="password"
+                            value={caldavForm.password}
+                            onChange={(inputEvent) =>
+                              updateCalDavForm(
+                                connection,
+                                "password",
+                                inputEvent.target.value
+                              )
+                            }
+                            className={cn(INPUT, "mt-1.5")}
+                            placeholder="Non affiché après sauvegarde"
+                            autoComplete="new-password"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleTestCalDav(connection)}
+                          disabled={testingCalDavId === connection.id}
+                          className={BUTTON_DARK}
+                        >
+                          <Icon name="link" className="h-3.5 w-3.5" />
+                          {testingCalDavId === connection.id
+                            ? "Test en cours..."
+                            : "Tester la connexion"}
+                        </button>
+                        {connection.writeEnabled && (
+                          <button
+                            type="button"
+                            onClick={() => handleDisableCalDav(connection)}
+                            disabled={updatingId === connection.id}
+                            className={BUTTON_LIGHT}
+                          >
+                            Désactiver l'écriture
+                          </button>
+                        )}
+                        <span className="text-xs font-medium text-black/42">
+                          Dernier test : {formatDate(connection.lastWriteTestAt)}
+                        </span>
+                      </div>
+
+                      {(connection.selectedCalendarName ||
+                        connection.selectedCalendarUrl) && (
+                        <p className="mt-3 rounded-2xl border border-white/70 bg-white/55 px-4 py-3 text-xs font-semibold leading-5 text-black/50">
+                          Calendrier cible :{" "}
+                          {connection.selectedCalendarName ||
+                            connection.selectedCalendarUrl}
+                        </p>
+                      )}
+
+                      {!!discoveredCalendars.length && (
+                        <div className="mt-4 rounded-3xl border border-white/70 bg-white/45 p-3">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                            Calendriers détectés
+                          </p>
+                          <div className="mt-3 space-y-2">
+                            {discoveredCalendars.map((calendar) => {
+                              const isSelected =
+                                connection.selectedCalendarUrl === calendar.url;
+                              const key = `${connection.id}:${calendar.url}`;
+
+                              return (
+                                <div
+                                  key={calendar.url}
+                                  className="flex flex-col gap-3 rounded-2xl border border-white/70 bg-white/60 p-3 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <div>
+                                    <p className="text-sm font-semibold tracking-[-0.02em]">
+                                      {calendar.name}
+                                    </p>
+                                    <p className="mt-1 break-all text-xs font-medium text-black/38">
+                                      {calendar.url}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleSelectWriteCalendar(
+                                        connection,
+                                        calendar
+                                      )
+                                    }
+                                    disabled={
+                                      isSelected ||
+                                      selectingCalendarKey === key
+                                    }
+                                    className={
+                                      isSelected ? BUTTON_LIGHT : BUTTON_DARK
+                                    }
+                                  >
+                                    {isSelected
+                                      ? "Sélectionné"
+                                      : selectingCalendarKey === key
+                                        ? "Sélection..."
+                                        : "Utiliser ce calendrier"}
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     {syncResult && (
                       <div className="mt-4 space-y-4">
                         <div className="grid gap-3 rounded-3xl border border-white/70 bg-white/45 p-4 backdrop-blur-xl sm:grid-cols-4">

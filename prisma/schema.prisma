@@ -184,6 +184,13 @@ enum CalendarConnectionStatus {
   ERROR
 }
 
+enum CalendarWriteStatus {
+  NOT_CONFIGURED
+  READY
+  ERROR
+  DISABLED
+}
+
 enum CalendarEventSyncStatus {
   SYNCED
   LOCAL_PENDING
@@ -766,23 +773,34 @@ model Appointment {
 }
 
 model CalendarConnection {
-  id            String                   @id @default(cuid())
-  entityId      String
-  entity        Entity                   @relation(fields: [entityId], references: [id], onDelete: Cascade)
-  provider      CalendarProvider         @default(APPLE_CALENDAR)
-  name          String
-  calendarUrl   String
-  status        CalendarConnectionStatus @default(CONNECTED)
-  lastSyncedAt  DateTime?
-  lastError     String?
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
-  eventMappings CalendarEventMapping[]
-  syncActions   CalendarSyncAction[]
+  id                      String                   @id @default(cuid())
+  entityId                String
+  entity                  Entity                   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  provider                CalendarProvider         @default(APPLE_CALENDAR)
+  name                    String
+  calendarUrl             String
+  status                  CalendarConnectionStatus @default(CONNECTED)
+  writeEnabled            Boolean                  @default(false)
+  caldavUrl               String?
+  caldavUsername          String?
+  caldavPasswordEncrypted String?
+  selectedCalendarUrl     String?
+  selectedCalendarName    String?
+  capabilities            Json?
+  lastWriteTestAt         DateTime?
+  writeStatus             CalendarWriteStatus      @default(NOT_CONFIGURED)
+  writeLastError          String?
+  lastSyncedAt            DateTime?
+  lastError               String?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  eventMappings           CalendarEventMapping[]
+  syncActions             CalendarSyncAction[]
 
   @@index([entityId])
   @@index([entityId, provider])
   @@index([entityId, status])
+  @@index([entityId, writeStatus])
 }
 
 model CalendarEventMapping {
