@@ -119,6 +119,20 @@ interface CalendarSyncPushResult {
   };
 }
 
+interface CalendarSyncBatchResult {
+  processedCount: number;
+  doneCount: number;
+  failedCount: number;
+  skippedCount: number;
+  results: {
+    actionId: string;
+    actionType: CalendarSyncActionType;
+    status: CalendarSyncActionStatus;
+    success: boolean;
+    error?: string | null;
+  }[];
+}
+
 interface Patient {
   id: string;
   firstName: string;
@@ -454,9 +468,12 @@ export default function CalendarSettingsPage() {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [testingCalDavId, setTestingCalDavId] = useState<string | null>(null);
   const [pushingActionId, setPushingActionId] = useState<string | null>(null);
+  const [pushingPendingActions, setPushingPendingActions] = useState(false);
   const [selectingCalendarKey, setSelectingCalendarKey] = useState<
     string | null
   >(null);
+  const [batchPushResult, setBatchPushResult] =
+    useState<CalendarSyncBatchResult | null>(null);
   const [syncResults, setSyncResults] = useState<Record<string, CalendarSyncResult>>(
     {}
   );
@@ -874,6 +891,7 @@ export default function CalendarSettingsPage() {
     setPushingActionId(action.id);
     setError(null);
     setSuccess(null);
+    setBatchPushResult(null);
 
     try {
       await request<CalendarSyncPushResult>(
@@ -893,6 +911,37 @@ export default function CalendarSettingsPage() {
       await loadConnections();
     } finally {
       setPushingActionId(null);
+    }
+  };
+
+  const handlePushPendingActions = async () => {
+    setPushingPendingActions(true);
+    setError(null);
+    setSuccess(null);
+    setBatchPushResult(null);
+
+    try {
+      const result = await request<CalendarSyncBatchResult>(
+        "/api/hugo/calendar-sync-actions/push-pending",
+        {
+          method: "POST",
+        }
+      );
+
+      setBatchPushResult(result);
+      setSuccess(
+        `${result.doneCount} synchronisée(s), ${result.failedCount} échouée(s), ${result.skippedCount} ignorée(s).`
+      );
+      await loadConnections();
+    } catch (pushError) {
+      setError(
+        pushError instanceof Error
+          ? pushError.message
+          : "Impossible de synchroniser les actions en attente"
+      );
+      await loadConnections();
+    } finally {
+      setPushingPendingActions(false);
     }
   };
 
@@ -1652,11 +1701,56 @@ export default function CalendarSettingsPage() {
                         Traitement manuel uniquement. Aucun push automatique.
                       </p>
                     </div>
-                    <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/45">
-                      {primaryConnection.syncActions?.length || 0} action
-                      {(primaryConnection.syncActions?.length || 0) > 1 ? "s" : ""}
-                    </span>
+                    <div className="flex flex-col items-start gap-2 sm:items-end">
+                      <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/45">
+                        {primaryConnection.syncActions?.length || 0} action
+                        {(primaryConnection.syncActions?.length || 0) > 1 ? "s" : ""}
+                      </span>
+                      {!!primaryConnection.syncActions?.length && (
+                        <button
+                          type="button"
+                          onClick={handlePushPendingActions}
+                          disabled={
+                            pushingPendingActions ||
+                            primaryConnection.writeStatus !== "READY" ||
+                            primaryConnection.targetCalendarInvalid ||
+                            !isWritableCalendarTargetUrl(
+                              primaryConnection.selectedCalendarUrl
+                            )
+                          }
+                          className={BUTTON_DARK}
+                        >
+                          <Icon name="upload" className="h-3.5 w-3.5" />
+                          {pushingPendingActions
+                            ? "Synchronisation..."
+                            : "Synchroniser les actions en attente"}
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {batchPushResult && (
+                    <div className="mt-4 rounded-2xl border border-cyan-100/80 bg-cyan-50/65 px-4 py-3 text-xs font-semibold leading-5 text-cyan-900/70">
+                      <p>
+                        {batchPushResult.doneCount} synchronisée(s),
+                        {" "}
+                        {batchPushResult.failedCount} échouée(s),
+                        {" "}
+                        {batchPushResult.skippedCount} ignorée(s).
+                      </p>
+                      {batchPushResult.results.some((result) => !result.success) && (
+                        <div className="mt-2 space-y-1 text-[#9a6657]">
+                          {batchPushResult.results
+                            .filter((result) => !result.success)
+                            .map((result) => (
+                              <p key={result.actionId}>
+                                {result.actionType} : {result.error || "Erreur inconnue"}
+                              </p>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {!primaryConnection.syncActions?.length ? (
                     <p className="mt-4 text-sm font-medium text-black/42">
@@ -1703,6 +1797,7 @@ export default function CalendarSettingsPage() {
                                 onClick={() => handlePushCalendarAction(action)}
                                 disabled={
                                   pushingActionId === action.id ||
+                                  pushingPendingActions ||
                                   primaryConnection.writeStatus !== "READY" ||
                                   primaryConnection.targetCalendarInvalid ||
                                   !isWritableCalendarTargetUrl(
