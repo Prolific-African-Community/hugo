@@ -271,14 +271,63 @@ const deleteAppointment = async (
 
   const appointment = await prisma.appointment.findFirst({
     where: { id, entityId: cabinet.cabinetId },
-    select: { id: true },
+    select: {
+      id: true,
+      startsAt: true,
+      endsAt: true,
+      notes: true,
+      calendarEventMapping: {
+        select: {
+          id: true,
+          calendarConnectionId: true,
+          externalEtag: true,
+          externalEventId: true,
+          provider: true,
+        },
+      },
+      patient: {
+        select: {
+          firstName: true,
+          lastName: true,
+        },
+      },
+    },
   });
 
   if (!appointment) {
     return jsonError(res, 404, "Appointment not found");
   }
 
-  await prisma.appointment.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    if (appointment.calendarEventMapping) {
+      const patientName =
+        `${appointment.patient.firstName} ${appointment.patient.lastName}`.trim();
+
+      await tx.calendarSyncAction.create({
+        data: {
+          entityId: cabinet.cabinetId,
+          appointmentId: appointment.id,
+          calendarConnectionId:
+            appointment.calendarEventMapping.calendarConnectionId,
+          mappingId: appointment.calendarEventMapping.id,
+          provider: appointment.calendarEventMapping.provider,
+          actionType: CalendarSyncActionType.DELETE_EVENT,
+          status: CalendarSyncActionStatus.PENDING,
+          payload: {
+            externalEventId: appointment.calendarEventMapping.externalEventId,
+            etag: appointment.calendarEventMapping.externalEtag,
+            startsAt: appointment.startsAt.toISOString(),
+            endsAt: appointment.endsAt.toISOString(),
+            title: patientName ? `Rendez-vous - ${patientName}` : "Rendez-vous Hugo",
+            patientName,
+            notes: appointment.notes,
+          },
+        },
+      });
+    }
+
+    await tx.appointment.delete({ where: { id } });
+  });
 
   return jsonSuccess(res, { id });
 };

@@ -8,6 +8,7 @@ import {
 import type { NextApiResponse } from "next";
 import {
   createCalDavEvent,
+  deleteCalDavEvent,
   decryptCalDavPassword,
   isWritableCalendarTargetUrl,
   READ_ONLY_APPLE_CALENDAR_URL_MESSAGE,
@@ -107,29 +108,49 @@ const pushCalendarSyncAction = async (
     return readableError(res, 400, "Action must be PENDING or FAILED");
   }
 
-  if (action.actionType === CalendarSyncActionType.DELETE_EVENT) {
-    return readableError(res, 400, "DELETE_EVENT non supporté dans ce run.");
-  }
-
   if (
     action.actionType !== CalendarSyncActionType.CREATE_EVENT &&
-    action.actionType !== CalendarSyncActionType.UPDATE_EVENT
+    action.actionType !== CalendarSyncActionType.UPDATE_EVENT &&
+    action.actionType !== CalendarSyncActionType.DELETE_EVENT
   ) {
     return readableError(res, 400, "Action non supportée dans ce run.");
   }
 
-  if (!action.appointment) {
+  if (action.actionType !== CalendarSyncActionType.DELETE_EVENT && !action.appointment) {
     return readableError(res, 400, "Appointment linked to this action is missing");
   }
 
-  if (!action.appointment.startsAt || !action.appointment.endsAt) {
+  if (
+    action.actionType !== CalendarSyncActionType.DELETE_EVENT &&
+    (!action.appointment?.startsAt || !action.appointment.endsAt)
+  ) {
     return readableError(res, 400, "Dates de rendez-vous manquantes.");
   }
 
   const appointment = action.appointment;
+  const payloadExternalEventId = getPayloadString(
+    action.payload,
+    "externalEventId"
+  );
+
+  const mapping =
+    action.mapping ||
+    (appointment
+      ? await prisma.calendarEventMapping.findUnique({
+          where: { appointmentId: appointment.id },
+        })
+      : null);
 
   const connection =
     action.calendarConnection ||
+    (mapping?.calendarConnectionId
+      ? await prisma.calendarConnection.findFirst({
+          where: {
+            id: mapping.calendarConnectionId,
+            entityId: cabinet.cabinetId,
+          },
+        })
+      : null) ||
     (await prisma.calendarConnection.findFirst({
       where: {
         entityId: cabinet.cabinetId,
@@ -174,12 +195,6 @@ const pushCalendarSyncAction = async (
   const selectedCalendarUrl = connection.selectedCalendarUrl;
   const caldavUsername = connection.caldavUsername;
 
-  const mapping =
-    action.mapping ||
-    (await prisma.calendarEventMapping.findUnique({
-      where: { appointmentId: appointment.id },
-    }));
-
   if (action.actionType === CalendarSyncActionType.UPDATE_EVENT) {
     if (!mapping) {
       return readableError(
@@ -190,6 +205,14 @@ const pushCalendarSyncAction = async (
     }
 
     if (!mapping.externalEventId) {
+      return readableError(res, 400, "UID Apple Calendar manquant.");
+    }
+  }
+
+  if (action.actionType === CalendarSyncActionType.DELETE_EVENT) {
+    const externalEventId = mapping?.externalEventId || payloadExternalEventId;
+
+    if (!externalEventId) {
       return readableError(res, 400, "UID Apple Calendar manquant.");
     }
   }
@@ -209,6 +232,10 @@ const pushCalendarSyncAction = async (
     const pushedMapping =
       action.actionType === CalendarSyncActionType.CREATE_EVENT
         ? await (async () => {
+            if (!appointment) {
+              throw new Error("Appointment linked to this action is missing");
+            }
+
             const result = await createCalDavEvent({
               selectedCalendarUrl,
               username: caldavUsername,
@@ -257,7 +284,12 @@ const pushCalendarSyncAction = async (
               },
             });
           })()
-        : await (async () => {
+        : action.actionType === CalendarSyncActionType.UPDATE_EVENT
+          ? await (async () => {
+            if (!appointment) {
+              throw new Error("Appointment linked to this action is missing");
+            }
+
             if (!mapping) {
               throw new Error("Mapping Apple Calendar introuvable pour ce rendez-vous.");
             }
@@ -295,13 +327,54 @@ const pushCalendarSyncAction = async (
                 syncStatus: true,
               },
             });
-          })();
+          })()
+          : await (async () => {
+              const externalEventId =
+                mapping?.externalEventId || payloadExternalEventId;
+
+              if (!externalEventId) {
+                throw new Error("UID Apple Calendar manquant.");
+              }
+
+              const result = await deleteCalDavEvent({
+                selectedCalendarUrl,
+                username: caldavUsername,
+                password,
+                externalEventId,
+                etag: mapping?.externalEtag || getPayloadString(action.payload, "etag"),
+              });
+
+              if (!mapping) {
+                return null;
+              }
+
+              return prisma.calendarEventMapping.update({
+                where: { id: mapping.id },
+                data: {
+                  externalEtag: result.etag,
+                  lastPushedAt: new Date(),
+                  syncStatus: CalendarEventSyncStatus.SYNCED,
+                  lastSyncError: null,
+                },
+                select: {
+                  id: true,
+                  appointmentId: true,
+                  calendarConnectionId: true,
+                  provider: true,
+                  externalEventId: true,
+                  externalCalendarId: true,
+                  externalEtag: true,
+                  lastPushedAt: true,
+                  syncStatus: true,
+                },
+              });
+            })();
 
     await prisma.calendarSyncAction.update({
       where: { id: action.id },
       data: {
         status: CalendarSyncActionStatus.DONE,
-        mappingId: pushedMapping.id,
+        ...(pushedMapping ? { mappingId: pushedMapping.id } : {}),
         calendarConnectionId: connection.id,
         error: null,
         processedAt: new Date(),

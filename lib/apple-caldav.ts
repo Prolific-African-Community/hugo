@@ -29,6 +29,14 @@ interface UpdateCalDavEventParams {
   etag?: string | null;
 }
 
+interface DeleteCalDavEventParams {
+  selectedCalendarUrl: string;
+  username: string;
+  password: string;
+  externalEventId: string;
+  etag?: string | null;
+}
+
 export interface DiscoveredCalendar {
   name: string;
   url: string;
@@ -435,6 +443,51 @@ export async function updateCalDavEvent(params: UpdateCalDavEventParams) {
 
   if (!response.ok && response.status !== 201 && response.status !== 204) {
     throw new Error(`Mise à jour Apple Calendar refusée (${response.status})`);
+  }
+
+  return {
+    externalEventId: params.externalEventId,
+    status: response.status,
+    etag: response.headers.get("etag"),
+  };
+}
+
+export async function deleteCalDavEvent(params: DeleteCalDavEventParams) {
+  if (!params.externalEventId.trim()) {
+    throw new Error("UID Apple Calendar manquant");
+  }
+
+  const eventUrl = buildEventUrl(
+    params.selectedCalendarUrl,
+    params.externalEventId
+  );
+
+  const response = await fetch(eventUrl, {
+    method: "DELETE",
+    headers: {
+      Authorization: basicAuthHeader(params.username, params.password),
+      ...(params.etag ? { "If-Match": params.etag } : {}),
+    },
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Identifiants CalDAV refusés");
+  }
+
+  if (response.status === 404 || response.status === 410) {
+    return {
+      externalEventId: params.externalEventId,
+      status: response.status,
+      etag: response.headers.get("etag"),
+    };
+  }
+
+  if (response.status === 412) {
+    throw new Error("L'événement Apple Calendar a changé depuis la dernière synchronisation.");
+  }
+
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`Suppression Apple Calendar refusée (${response.status})`);
   }
 
   return {

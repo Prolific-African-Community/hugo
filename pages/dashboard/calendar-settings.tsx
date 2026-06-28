@@ -87,6 +87,14 @@ interface CalendarSyncAction {
   status: CalendarSyncActionStatus;
   error?: string | null;
   createdAt: string;
+  payload?: {
+    endsAt?: string;
+    externalEventId?: string;
+    notes?: string | null;
+    patientName?: string;
+    startsAt?: string;
+    title?: string;
+  } | null;
   appointment?: {
     id: string;
     startsAt: string;
@@ -361,6 +369,22 @@ function formatTargetCalendarUrl(value?: string | null) {
   } catch {
     return value.length > 56 ? `${value.slice(0, 36)}...${value.slice(-12)}` : value;
   }
+}
+
+function calendarActionLabel(action: CalendarSyncAction) {
+  if (action.appointment) {
+    return `${patientName(action.appointment.patient)} - ${formatDate(action.appointment.startsAt)}`;
+  }
+
+  const title = action.payload?.title || action.payload?.patientName;
+  const date = formatDate(action.payload?.startsAt || action.createdAt);
+  return title ? `${title} - ${date}` : `Rendez-vous supprimé - ${date}`;
+}
+
+function calendarActionButtonLabel(actionType: CalendarSyncActionType) {
+  if (actionType === "CREATE_EVENT") return "Créer dans Apple Calendar";
+  if (actionType === "UPDATE_EVENT") return "Mettre à jour Apple Calendar";
+  return "Supprimer dans Apple Calendar";
 }
 
 function eventKey(event: CalendarSyncEvent) {
@@ -1661,9 +1685,7 @@ export default function CalendarSettingsPage() {
                                 </span>
                               </div>
                               <p className="mt-2 text-xs font-medium text-black/45">
-                                {action.appointment
-                                  ? `${patientName(action.appointment.patient)} - ${formatDate(action.appointment.startsAt)}`
-                                  : "Rendez-vous introuvable"}
+                                {calendarActionLabel(action)}
                               </p>
                               {action.error && (
                                 <p className="mt-2 rounded-2xl border border-[#f3ddd7]/80 bg-[#fff1ed]/80 px-3 py-2 text-xs font-semibold leading-5 text-[#9a6657]">
@@ -1673,7 +1695,8 @@ export default function CalendarSettingsPage() {
                             </div>
 
                             {action.actionType === "CREATE_EVENT" ||
-                            action.actionType === "UPDATE_EVENT" ? (
+                            action.actionType === "UPDATE_EVENT" ||
+                            action.actionType === "DELETE_EVENT" ? (
                               <div className="flex flex-col items-start gap-2 sm:items-end">
                               <button
                                 type="button"
@@ -1691,9 +1714,7 @@ export default function CalendarSettingsPage() {
                                 <Icon name="upload" className="h-3.5 w-3.5" />
                                 {pushingActionId === action.id
                                   ? "Push..."
-                                  : action.actionType === "UPDATE_EVENT"
-                                    ? "Mettre à jour Apple Calendar"
-                                    : "Créer dans Apple Calendar"}
+                                  : calendarActionButtonLabel(action.actionType)}
                               </button>
                               {primaryConnection.writeStatus === "READY" &&
                                 (primaryConnection.targetCalendarInvalid ||
