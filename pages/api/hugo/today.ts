@@ -2,6 +2,7 @@ import type { NextApiResponse } from "next";
 import { Prisma } from "@prisma/client";
 import { jsonError, jsonSuccess } from "../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../lib/auth";
+import { cleanCalendarNotes } from "../../../lib/hugo-display";
 import { requireHugoCabinet } from "../../../lib/hugo-auth";
 import { prisma } from "../../../lib/prisma";
 
@@ -108,10 +109,42 @@ const serializeAppointment = <
 
   return {
     ...rest,
+    notes:
+      "notes" in rest && typeof rest.notes === "string"
+        ? cleanCalendarNotes(rest.notes)
+        : "notes" in rest
+          ? rest.notes
+          : null,
     linkedSessionId: session?.id || null,
     hasSession: Boolean(session?.id),
     linkedSession: session || null,
   };
+};
+
+const startOfDay = (date: Date) => {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  return value;
+};
+
+const addDays = (date: Date, days: number) => {
+  const value = new Date(date);
+  value.setDate(value.getDate() + days);
+  return value;
+};
+
+const dayLabel = (date: Date, index: number) => {
+  if (index === 0) return "Aujourd'hui";
+  if (index === 1) return "Demain";
+
+  return new Intl.DateTimeFormat("fr-LU", { weekday: "long" }).format(date);
+};
+
+const formatAgendaDate = (date: Date) => {
+  return new Intl.DateTimeFormat("fr-LU", {
+    day: "2-digit",
+    month: "long",
+  }).format(date);
 };
 
 const getToday = async (
@@ -125,17 +158,18 @@ const getToday = async (
   }
 
   const now = new Date();
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = new Date(startOfToday);
-  endOfToday.setDate(endOfToday.getDate() + 1);
+  const startOfToday = startOfDay(now);
+  const endOfToday = addDays(startOfToday, 1);
+  const endOfAgendaWindow = addDays(startOfToday, 3);
 
   const [
     todayAppointments,
+    agendaAppointments,
     upcomingAppointments,
     attentionRows,
     draftRows,
     readyRows,
+    lastAppleConnection,
   ] = await Promise.all([
     prisma.appointment.findMany({
       where: {
@@ -143,6 +177,17 @@ const getToday = async (
         startsAt: {
           gte: startOfToday,
           lt: endOfToday,
+        },
+      },
+      select: appointmentSelect,
+      orderBy: { startsAt: "asc" },
+    }),
+    prisma.appointment.findMany({
+      where: {
+        entityId: cabinet.cabinetId,
+        startsAt: {
+          gte: startOfToday,
+          lt: endOfAgendaWindow,
         },
       },
       select: appointmentSelect,
@@ -197,6 +242,21 @@ const getToday = async (
       ORDER BY p."updatedAt" DESC
       LIMIT 10
     `,
+    prisma.calendarConnection.findFirst({
+      where: {
+        entityId: cabinet.cabinetId,
+        provider: "APPLE_CALENDAR",
+        lastSyncedAt: {
+          not: null,
+        },
+      },
+      orderBy: {
+        lastSyncedAt: "desc",
+      },
+      select: {
+        lastSyncedAt: true,
+      },
+    }),
   ]);
 
   const attentionIds = attentionRows.map((row) => row.id);
@@ -247,9 +307,27 @@ const getToday = async (
   const serializedTodayAppointments = todayAppointments.map(
     serializeAppointment
   );
+  const serializedAgendaAppointments = agendaAppointments.map(
+    serializeAppointment
+  );
   const serializedUpcomingAppointments = upcomingAppointments.map(
     serializeAppointment
   );
+  const agendaDays = Array.from({ length: 3 }).map((_, index) => {
+    const dayStart = addDays(startOfToday, index);
+    const nextDayStart = addDays(dayStart, 1);
+
+    return {
+      date: dayStart.toISOString(),
+      dayLabel: dayLabel(dayStart, index),
+      dateLabel: formatAgendaDate(dayStart),
+      isToday: index === 0,
+      appointments: serializedAgendaAppointments.filter((appointment) => {
+        const startsAt = new Date(appointment.startsAt);
+        return startsAt >= dayStart && startsAt < nextDayStart;
+      }),
+    };
+  });
   const sessionsAlreadyCreatedToday = serializedTodayAppointments.filter(
     (appointment) => appointment.hasSession
   ).length;
@@ -260,9 +338,11 @@ const getToday = async (
     cabinet: {
       cabinetId: cabinet.cabinetId,
       name: cabinet.cabinetName,
+      lastAppleCalendarSync: lastAppleConnection?.lastSyncedAt?.toISOString() || null,
     },
     todayAppointments: serializedTodayAppointments,
     upcomingAppointments: serializedUpcomingAppointments,
+    agendaDays,
     billingActions,
     summary: {
       appointmentsToday: serializedTodayAppointments.length,
