@@ -9,6 +9,8 @@ import { prisma } from "./prisma";
 
 interface IcsEvent {
   uid: string | null;
+  externalEventId: string | null;
+  recurrenceId: string | null;
   summary: string | null;
   startsAt: Date | null;
   endsAt: Date | null;
@@ -17,6 +19,7 @@ interface IcsEvent {
 
 interface CalendarSyncEventPayload {
   uid: string | null;
+  externalEventId: string | null;
   summary: string | null;
   startsAt: string | null;
   endsAt: string | null;
@@ -24,6 +27,15 @@ interface CalendarSyncEventPayload {
   reason: string;
   patientName: string | null;
   appointmentId: string | null;
+  persisted: boolean;
+  action:
+    | "created"
+    | "updated"
+    | "mapped_existing"
+    | "created_from_orphan_mapping"
+    | "unmatched"
+    | "skipped"
+    | "failed";
 }
 
 export class CalendarPullSyncError extends Error {
@@ -149,13 +161,22 @@ const parseIcsEvents = (ics: string): IcsEvent[] => {
   const unfolded = unfoldIcs(ics);
   const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
 
-  return blocks.map((block) => ({
-    uid: getIcsValue(block, "UID"),
-    summary: unescapeIcsText(getIcsValue(block, "SUMMARY") || ""),
-    startsAt: parseIcsDate(getIcsValue(block, "DTSTART")),
-    endsAt: parseIcsDate(getIcsValue(block, "DTEND")),
-    description: unescapeIcsText(getIcsValue(block, "DESCRIPTION") || ""),
-  }));
+  return blocks.map((block) => {
+    const uid = getIcsValue(block, "UID");
+    const recurrenceId = getIcsValue(block, "RECURRENCE-ID");
+
+    return {
+      uid,
+      externalEventId: uid
+        ? [uid, recurrenceId].filter(Boolean).join("::")
+        : null,
+      recurrenceId,
+      summary: unescapeIcsText(getIcsValue(block, "SUMMARY") || ""),
+      startsAt: parseIcsDate(getIcsValue(block, "DTSTART")),
+      endsAt: parseIcsDate(getIcsValue(block, "DTEND")),
+      description: unescapeIcsText(getIcsValue(block, "DESCRIPTION") || ""),
+    };
+  });
 };
 
 const buildImportedNotes = ({
@@ -170,6 +191,7 @@ const buildImportedNotes = ({
 
 const toSyncEventPayload = ({
   uid,
+  externalEventId,
   summary,
   startsAt,
   endsAt,
@@ -177,8 +199,11 @@ const toSyncEventPayload = ({
   reason,
   patientName,
   appointmentId,
+  persisted,
+  action,
 }: {
   uid: string | null;
+  externalEventId: string | null;
   summary: string | null;
   startsAt: Date | null;
   endsAt: Date | null;
@@ -186,8 +211,11 @@ const toSyncEventPayload = ({
   reason: string;
   patientName: string | null;
   appointmentId: string | null;
+  persisted: boolean;
+  action: CalendarSyncEventPayload["action"];
 }): CalendarSyncEventPayload => ({
   uid,
+  externalEventId,
   summary,
   startsAt: startsAt?.toISOString() || null,
   endsAt: endsAt?.toISOString() || null,
@@ -195,14 +223,18 @@ const toSyncEventPayload = ({
   reason,
   patientName,
   appointmentId,
+  persisted,
+  action,
 });
 
 export async function pullCalendarConnectionEvents({
   cabinetId,
   connectionId,
+  debug = false,
 }: {
   cabinetId: string;
   connectionId: string;
+  debug?: boolean;
 }) {
   const connection = await prisma.calendarConnection.findFirst({
     where: { id: connectionId, entityId: cabinetId },
@@ -237,22 +269,31 @@ export async function pullCalendarConnectionEvents({
 
     let importedCount = 0;
     let updatedCount = 0;
+    let mappedExistingCount = 0;
     let unmatchedCount = 0;
     let skippedCount = 0;
+    let failedPersistenceCount = 0;
     const appointments: Array<Record<string, unknown>> = [];
     const recognizedEvents: CalendarSyncEventPayload[] = [];
     const unmatchedEvents: CalendarSyncEventPayload[] = [];
     const skippedEvents: CalendarSyncEventPayload[] = [];
+    const failures: Array<{
+      uid: string | null;
+      summary: string | null;
+      reason: string;
+    }> = [];
 
     for (const event of events) {
       const uid = event.uid?.trim();
+      const externalEventId = event.externalEventId?.trim();
       const summary = event.summary?.trim();
 
-      if (!uid || !summary || !event.startsAt || !event.endsAt) {
+      if (!uid || !externalEventId || !summary || !event.startsAt || !event.endsAt) {
         skippedCount += 1;
         skippedEvents.push(
           toSyncEventPayload({
             uid: uid || null,
+            externalEventId: externalEventId || null,
             summary: summary || null,
             startsAt: event.startsAt,
             endsAt: event.endsAt,
@@ -260,6 +301,8 @@ export async function pullCalendarConnectionEvents({
             reason: "VEVENT incomplet: UID, SUMMARY, DTSTART ou DTEND manquant",
             patientName: null,
             appointmentId: null,
+            persisted: false,
+            action: "skipped",
           })
         );
         continue;
@@ -273,6 +316,7 @@ export async function pullCalendarConnectionEvents({
         skippedEvents.push(
           toSyncEventPayload({
             uid,
+            externalEventId,
             summary,
             startsAt,
             endsAt,
@@ -280,6 +324,8 @@ export async function pullCalendarConnectionEvents({
             reason: "VEVENT ignoré: DTEND doit être après DTSTART",
             patientName: null,
             appointmentId: null,
+            persisted: false,
+            action: "skipped",
           })
         );
         continue;
@@ -299,7 +345,7 @@ export async function pullCalendarConnectionEvents({
         where: {
           calendarConnectionId_externalEventId: {
             calendarConnectionId: connection.id,
-            externalEventId: uid,
+            externalEventId,
           },
         },
         include: {
@@ -322,6 +368,7 @@ export async function pullCalendarConnectionEvents({
         skippedEvents.push(
           toSyncEventPayload({
             uid,
+            externalEventId,
             summary,
             startsAt,
             endsAt,
@@ -331,54 +378,99 @@ export async function pullCalendarConnectionEvents({
               ? `${mapping.appointment.patient.firstName} ${mapping.appointment.patient.lastName}`.trim()
               : null,
             appointmentId: mapping.appointmentId,
+            persisted: false,
+            action: "skipped",
           })
         );
         continue;
       }
 
       if (mapping) {
-        const appointment = await prisma.appointment.update({
-          where: { id: mapping.appointmentId },
-          data: {
-            startsAt,
-            endsAt,
-            status: AppointmentStatus.SCHEDULED,
-            source: AppointmentSource.APPLE_CALENDAR,
-            notes,
-          },
-          include: appointmentInclude,
-        });
+        try {
+          const appointment = await prisma.appointment.update({
+            where: { id: mapping.appointmentId },
+            data: {
+              startsAt,
+              endsAt,
+              ...(patient ? { patientId: patient.id } : {}),
+              status: AppointmentStatus.SCHEDULED,
+              source: AppointmentSource.APPLE_CALENDAR,
+              notes,
+            },
+            include: appointmentInclude,
+          });
 
-        await prisma.calendarEventMapping.update({
-          where: { id: mapping.id },
-          data: {
-            lastPulledAt: new Date(),
-            syncStatus: CalendarEventSyncStatus.SYNCED,
-            lastSyncError: null,
-          },
-        });
+          await prisma.calendarEventMapping.update({
+            where: { id: mapping.id },
+            data: {
+              lastPulledAt: new Date(),
+              syncStatus: CalendarEventSyncStatus.SYNCED,
+              lastSyncError: null,
+            },
+          });
 
-        updatedCount += 1;
-        appointments.push({
-          ...serializeAppointment(appointment),
-          matchedAutomatically: true,
-          confidence: match.confidence,
-          reason: "Événement Apple Calendar reconnu par mapping existant",
-        });
-        recognizedEvents.push(
-          toSyncEventPayload({
-            uid,
-            summary,
-            startsAt,
-            endsAt,
+          updatedCount += 1;
+          appointments.push({
+            ...serializeAppointment(appointment),
+            matchedAutomatically: true,
             confidence: match.confidence,
-            reason: "Mapping Apple Calendar existant",
-            patientName: appointment.patient
-              ? `${appointment.patient.firstName} ${appointment.patient.lastName}`.trim()
-              : null,
-            appointmentId: appointment.id,
-          })
-        );
+            reason: "Événement Apple Calendar reconnu par mapping existant",
+            persisted: true,
+            action: "updated",
+          });
+          recognizedEvents.push(
+            toSyncEventPayload({
+              uid,
+              externalEventId,
+              summary,
+              startsAt,
+              endsAt,
+              confidence: match.confidence,
+              reason: "Mapping Apple Calendar existant",
+              patientName: appointment.patient
+                ? `${appointment.patient.firstName} ${appointment.patient.lastName}`.trim()
+                : null,
+              appointmentId: appointment.id,
+              persisted: true,
+              action: "updated",
+            })
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Impossible de persister l'événement reconnu";
+
+          failedPersistenceCount += 1;
+          skippedCount += 1;
+          failures.push({ uid, summary, reason: message });
+
+          await prisma.calendarEventMapping.update({
+            where: { id: mapping.id },
+            data: {
+              syncStatus: CalendarEventSyncStatus.ERROR,
+              lastSyncError: message,
+            },
+          });
+
+          skippedEvents.push(
+            toSyncEventPayload({
+              uid,
+              externalEventId,
+              summary,
+              startsAt,
+              endsAt,
+              confidence: match.confidence,
+              reason: message,
+              patientName: mapping.appointment.patient
+                ? `${mapping.appointment.patient.firstName} ${mapping.appointment.patient.lastName}`.trim()
+                : null,
+              appointmentId: mapping.appointmentId,
+              persisted: false,
+              action: "failed",
+            })
+          );
+        }
         continue;
       }
 
@@ -387,6 +479,7 @@ export async function pullCalendarConnectionEvents({
         unmatchedEvents.push(
           toSyncEventPayload({
             uid,
+            externalEventId,
             summary,
             startsAt,
             endsAt,
@@ -397,59 +490,162 @@ export async function pullCalendarConnectionEvents({
                 : "Aucun patient reconnu.",
             patientName: null,
             appointmentId: null,
+            persisted: false,
+            action: "unmatched",
           })
         );
         continue;
       }
 
-      const appointment = await prisma.$transaction(async (tx) => {
-        const createdAppointment = await tx.appointment.create({
-          data: {
+      try {
+        const existingAppointment = await prisma.appointment.findFirst({
+          where: {
             entityId: cabinetId,
             patientId: patient.id,
             startsAt,
             endsAt,
-            status: AppointmentStatus.SCHEDULED,
-            source: AppointmentSource.APPLE_CALENDAR,
-            notes,
+            source: {
+              in: [AppointmentSource.APPLE_CALENDAR, AppointmentSource.MANUAL],
+            },
+            calendarEventMapping: null,
           },
           include: appointmentInclude,
         });
 
-        await tx.calendarEventMapping.create({
-          data: {
-            entityId: cabinetId,
-            appointmentId: createdAppointment.id,
-            calendarConnectionId: connection.id,
-            provider: connection.provider,
-            externalEventId: uid,
-            lastPulledAt: new Date(),
-            syncStatus: CalendarEventSyncStatus.SYNCED,
-          },
+        if (existingAppointment) {
+          const appointment = await prisma.$transaction(async (tx) => {
+            await tx.appointment.update({
+              where: { id: existingAppointment.id },
+              data: {
+                source: AppointmentSource.APPLE_CALENDAR,
+                status: AppointmentStatus.SCHEDULED,
+                notes,
+              },
+            });
+
+            await tx.calendarEventMapping.create({
+              data: {
+                entityId: cabinetId,
+                appointmentId: existingAppointment.id,
+                calendarConnectionId: connection.id,
+                provider: connection.provider,
+                externalEventId,
+                lastPulledAt: new Date(),
+                syncStatus: CalendarEventSyncStatus.SYNCED,
+              },
+            });
+
+            return tx.appointment.findUniqueOrThrow({
+              where: { id: existingAppointment.id },
+              include: appointmentInclude,
+            });
+          });
+
+          mappedExistingCount += 1;
+          appointments.push({
+            ...serializeAppointment(appointment),
+            matchedAutomatically: true,
+            confidence: match.confidence,
+            reason: "Événement Apple Calendar rattaché à un rendez-vous existant",
+            persisted: true,
+            action: "mapped_existing",
+          });
+          recognizedEvents.push(
+            toSyncEventPayload({
+              uid,
+              externalEventId,
+              summary,
+              startsAt,
+              endsAt,
+              confidence: match.confidence,
+              reason: "Rendez-vous existant rattaché au mapping Apple Calendar",
+              patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+              appointmentId: appointment.id,
+              persisted: true,
+              action: "mapped_existing",
+            })
+          );
+          continue;
+        }
+
+        const appointment = await prisma.$transaction(async (tx) => {
+          const createdAppointment = await tx.appointment.create({
+            data: {
+              entityId: cabinetId,
+              patientId: patient.id,
+              startsAt,
+              endsAt,
+              status: AppointmentStatus.SCHEDULED,
+              source: AppointmentSource.APPLE_CALENDAR,
+              notes,
+            },
+            include: appointmentInclude,
+          });
+
+          await tx.calendarEventMapping.create({
+            data: {
+              entityId: cabinetId,
+              appointmentId: createdAppointment.id,
+              calendarConnectionId: connection.id,
+              provider: connection.provider,
+              externalEventId,
+              lastPulledAt: new Date(),
+              syncStatus: CalendarEventSyncStatus.SYNCED,
+            },
+          });
+
+          return createdAppointment;
         });
 
-        return createdAppointment;
-      });
-
-      importedCount += 1;
-      appointments.push({
-        ...serializeAppointment(appointment),
-        matchedAutomatically: true,
-        confidence: match.confidence,
-        reason: match.reason,
-      });
-      recognizedEvents.push(
-        toSyncEventPayload({
-          uid,
-          summary,
-          startsAt,
-          endsAt,
+        importedCount += 1;
+        appointments.push({
+          ...serializeAppointment(appointment),
+          matchedAutomatically: true,
           confidence: match.confidence,
           reason: match.reason,
-          patientName: `${patient.firstName} ${patient.lastName}`.trim(),
-          appointmentId: appointment.id,
-        })
-      );
+          persisted: true,
+          action: "created",
+        });
+        recognizedEvents.push(
+          toSyncEventPayload({
+            uid,
+            externalEventId,
+            summary,
+            startsAt,
+            endsAt,
+            confidence: match.confidence,
+            reason: match.reason,
+            patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+            appointmentId: appointment.id,
+            persisted: true,
+            action: "created",
+          })
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Impossible de persister l'événement reconnu";
+
+        failedPersistenceCount += 1;
+        skippedCount += 1;
+        failures.push({ uid, summary, reason: message });
+        skippedEvents.push(
+          toSyncEventPayload({
+            uid,
+            externalEventId,
+            summary,
+            startsAt,
+            endsAt,
+            confidence: match.confidence,
+            reason: message,
+            patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+            appointmentId: null,
+            persisted: false,
+            action: "failed",
+          })
+        );
+      }
     }
 
     const updatedConnection = await prisma.calendarConnection.update({
@@ -469,14 +665,35 @@ export async function pullCalendarConnectionEvents({
 
     return {
       importedCount,
+      createdCount: importedCount,
       updatedCount,
+      mappedExistingCount,
       unmatchedCount,
       skippedCount,
+      failedPersistenceCount,
+      persistedCount: recognizedEvents.filter((event) => event.persisted).length,
       appointments,
       recognizedEvents,
       unmatchedEvents,
       skippedEvents,
       connection: updatedConnection,
+      ...(debug
+        ? {
+            debug: {
+              parsedCount: events.length,
+              recognizedCount: recognizedEvents.length,
+              persistedCount: recognizedEvents.filter((event) => event.persisted)
+                .length,
+              createdCount: importedCount,
+              updatedCount,
+              mappedExistingCount,
+              unmatchedCount,
+              skippedCount,
+              failedPersistenceCount,
+              failures,
+            },
+          }
+        : {}),
     };
   } catch (error) {
     const message =

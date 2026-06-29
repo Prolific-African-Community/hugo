@@ -1,5 +1,9 @@
 import type { NextApiResponse } from "next";
-import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
+import {
+  getQueryString,
+  jsonError,
+  jsonSuccess,
+} from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
 import {
   CalendarPullSyncError,
@@ -32,6 +36,7 @@ const syncCalendarConnection = async (
     const result = await pullCalendarConnectionEvents({
       connectionId: id,
       cabinetId: cabinet.cabinetId,
+      debug: getQueryString(req.query.debug) === "1",
     });
 
     return jsonSuccess(res, result);
