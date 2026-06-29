@@ -91,6 +91,9 @@ interface TodaySummary {
 interface TodayPayload {
   cabinet: Cabinet;
   selectedDate: string;
+  agendaStartDate: string;
+  agendaEndDate: string;
+  mode: AgendaMode;
   days: number;
   todayAppointments: TodayAppointment[];
   upcomingAppointments: TodayAppointment[];
@@ -106,7 +109,7 @@ interface ApiResponse<T> {
 }
 
 type ClassValue = string | false | null | undefined;
-type AgendaMode = "today" | "threeDays";
+type AgendaMode = "today" | "week";
 type IconName =
   | "grid"
   | "user"
@@ -126,6 +129,9 @@ const BUTTON_DARK =
   "inline-flex items-center justify-center gap-2 rounded-full bg-[#202522] px-4 py-2.5 text-xs font-semibold text-white shadow-[0_10px_25px_rgba(30,37,34,0.12)] transition-all duration-200 hover:-translate-y-px hover:bg-[#303832] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50";
 const BUTTON_LIGHT =
   "inline-flex items-center justify-center gap-2 rounded-full border border-white/70 bg-white/55 px-4 py-2.5 text-xs font-semibold text-black/72 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black disabled:cursor-not-allowed disabled:opacity-50";
+const AGENDA_START_HOUR = 8;
+const AGENDA_END_HOUR = 22;
+const WEEK_GRID_HEIGHT = 784;
 
 function Icon({
   name,
@@ -279,6 +285,18 @@ function toDateInputValue(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function dateInputToDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function addDaysToDateInput(value: string, days: number) {
+  const date = dateInputToDate(value);
+  date.setDate(date.getDate() + days);
+  return toDateInputValue(date);
+}
+
 function formatSelectedDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(year, month - 1, day);
@@ -290,6 +308,50 @@ function formatSelectedDate(value: string) {
         day: "2-digit",
         month: "long",
       }).format(date);
+}
+
+function formatShortDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat("fr-LU", {
+        day: "2-digit",
+        month: "short",
+      }).format(date);
+}
+
+function formatWeekBoundaryDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat("fr-LU", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+      }).format(date);
+}
+
+function formatAgendaPeriod(data: TodayPayload | null, selectedDate: string) {
+  if (data?.mode === "week") {
+    return `Semaine du ${formatWeekBoundaryDate(
+      data.agendaStartDate
+    )} au ${formatWeekBoundaryDate(
+      data.agendaEndDate
+    )}`;
+  }
+
+  return `Aujourd'hui — ${formatSelectedDate(selectedDate)}`;
+}
+
+function formatWeekNavigationLabel(data: TodayPayload | null) {
+  if (!data) return "Semaine";
+  return `${formatShortDate(data.agendaStartDate)} — ${formatShortDate(
+    data.agendaEndDate
+  )}`;
 }
 
 function formatDateTime(value?: string | null) {
@@ -320,6 +382,36 @@ function formatTime(value?: string | null) {
 
 function formatTimeRange(startsAt?: string | null, endsAt?: string | null) {
   return `${formatTime(startsAt)} - ${formatTime(endsAt)}`;
+}
+
+function minutesSinceMidnight(value?: string | null) {
+  if (!value) return AGENDA_START_HOUR * 60;
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? AGENDA_START_HOUR * 60
+    : date.getHours() * 60 + date.getMinutes();
+}
+
+function weekEventStyle(appointment: TodayAppointment) {
+  const dayStartMinutes = AGENDA_START_HOUR * 60;
+  const dayEndMinutes = AGENDA_END_HOUR * 60;
+  const visibleMinutes = dayEndMinutes - dayStartMinutes;
+  const startsAt = Math.max(
+    dayStartMinutes,
+    Math.min(dayEndMinutes, minutesSinceMidnight(appointment.startsAt))
+  );
+  const endsAt = Math.max(
+    startsAt + 20,
+    Math.min(dayEndMinutes, minutesSinceMidnight(appointment.endsAt))
+  );
+  const top = ((startsAt - dayStartMinutes) / visibleMinutes) * 100;
+  const height = Math.max(((endsAt - startsAt) / visibleMinutes) * 100, 5.5);
+
+  return {
+    top: `${top}%`,
+    height: `${height}%`,
+  };
 }
 
 function formatSessionDate(value?: string | null) {
@@ -369,6 +461,26 @@ function sourceTone(source: AppointmentSource) {
   }
 
   return "border-white/70 bg-white/65 text-black/48";
+}
+
+function weekAppointmentTone(appointment: TodayAppointment) {
+  if (appointment.linkedSession?.status === "COMPLETED") {
+    return "border-[#dbead7]/90 bg-[#eef8ed]/90 text-[#446b50]";
+  }
+
+  if (!appointment.hasSession) {
+    return "border-[#eadfca]/90 bg-[#fff7e6]/90 text-[#7b6745]";
+  }
+
+  if (appointment.source === "APPLE_CALENDAR") {
+    return "border-cyan-100/90 bg-cyan-50/90 text-cyan-900/75";
+  }
+
+  if (appointment.source === "DOCTENA") {
+    return "border-[#dbead7]/90 bg-[#f1f8ef]/90 text-[#5f7f68]";
+  }
+
+  return "border-white/80 bg-white/85 text-black/72";
 }
 
 function actionCopy(action: BillingAction) {
@@ -456,9 +568,11 @@ export default function TodayDashboard() {
     if (showRefresh) setSuccess(null);
 
     try {
-      const days = agendaMode === "today" ? 1 : 3;
+      const days = agendaMode === "today" ? 1 : 6;
       const todayData = await request<TodayPayload>(
-        `/api/hugo/today?date=${encodeURIComponent(date)}&days=${days}`
+        `/api/hugo/today?date=${encodeURIComponent(
+          date
+        )}&days=${days}&mode=${agendaMode}`
       );
       setData(todayData);
 
@@ -605,6 +719,18 @@ export default function TodayDashboard() {
     await loadToday(true, date);
   };
 
+  const handleWeekShift = async (days: number) => {
+    const nextDate = addDaysToDateInput(selectedAgendaDate, days);
+    setSelectedAgendaDate(nextDate);
+    await loadToday(true, nextDate);
+  };
+
+  const handleCurrentWeek = async () => {
+    const today = toDateInputValue(new Date());
+    setSelectedAgendaDate(today);
+    await loadToday(true, today);
+  };
+
   const entityQuery = data?.cabinet
     ? `?entityId=${encodeURIComponent(data.cabinet.cabinetId)}`
     : "";
@@ -616,7 +742,7 @@ export default function TodayDashboard() {
 
   const visibleAgendaDays = useMemo(() => {
     const days = data?.agendaDays || [];
-    return agendaMode === "today" ? days.slice(0, 1) : days.slice(0, 3);
+    return agendaMode === "today" ? days.slice(0, 1) : days.slice(0, 6);
   }, [agendaMode, data?.agendaDays]);
 
   const visibleAppointmentCount = useMemo(
@@ -637,6 +763,172 @@ export default function TodayDashboard() {
   const completedSessionsToday = todayAppointments.filter(
     (appointment) => appointment.linkedSession?.status === "COMPLETED"
   ).length;
+  const agendaPeriodLabel = formatAgendaPeriod(data, selectedAgendaDate);
+  const hasWeekAppointments = visibleAppointmentCount > 0;
+  const agendaHours = Array.from(
+    { length: AGENDA_END_HOUR - AGENDA_START_HOUR + 1 },
+    (_, index) => AGENDA_START_HOUR + index
+  );
+
+  const renderDetailedAppointment = (appointment: TodayAppointment) => {
+    const linkedSession = appointment.linkedSession;
+    const canCompleteSession = Boolean(
+      linkedSession && linkedSession.status !== "COMPLETED"
+    );
+    const patientPrescriptions = activePrescriptionsForPatient(
+      appointment.patient.id
+    );
+    const selectedPrescriptionId =
+      selectedPrescriptionByAppointment[appointment.id] ||
+      patientPrescriptions[0]?.id ||
+      "";
+    const visibleNotes = cleanCalendarNotes(appointment.notes);
+
+    return (
+      <article
+        key={appointment.id}
+        className="rounded-3xl border border-white/70 bg-white/65 p-4 shadow-[0_14px_34px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:-translate-y-px hover:bg-white/80"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-sm font-bold tracking-[-0.02em] text-cyan-900/75">
+              {formatTimeRange(appointment.startsAt, appointment.endsAt)}
+            </p>
+            <h3 className="mt-2 text-lg font-semibold tracking-[-0.035em]">
+              {patientName(appointment.patient)}
+            </h3>
+          </div>
+          <div className="flex flex-wrap gap-2 sm:justify-end">
+            <span
+              className={cn(
+                "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                sourceTone(appointment.source)
+              )}
+            >
+              {appointment.source}
+            </span>
+            <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
+              {appointment.status}
+            </span>
+            <span
+              className={cn(
+                "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                sessionStateTone(appointment)
+              )}
+            >
+              {sessionStateLabel(appointment)}
+            </span>
+          </div>
+        </div>
+
+        {linkedSession?.prescription && (
+          <div className="mt-4 rounded-2xl border border-cyan-100/70 bg-cyan-50/45 px-3 py-2">
+            <p className="text-xs font-semibold text-cyan-950/70">
+              {linkedSession.prescription.title}
+            </p>
+            <p className="mt-1 text-xs font-medium text-black/45">
+              Séance n°{linkedSession.sessionNumber} ·{" "}
+              {linkedSession.prescription.completedSessions} /{" "}
+              {linkedSession.prescription.prescribedSessions} réalisées
+            </p>
+          </div>
+        )}
+
+        {visibleNotes && (
+          <p className="mt-3 line-clamp-2 text-xs font-medium leading-5 text-black/42">
+            {visibleNotes}
+          </p>
+        )}
+
+        {!appointment.hasSession && (
+          <div className="mt-4 grid gap-2">
+            {patientPrescriptions.length > 1 && (
+              <select
+                value={selectedPrescriptionId}
+                onChange={(event) =>
+                  setSelectedPrescriptionByAppointment((current) => ({
+                    ...current,
+                    [appointment.id]: event.target.value,
+                  }))
+                }
+                className="w-full rounded-full border border-white/80 bg-white/65 px-3 py-2 text-xs font-semibold text-black/65 outline-none shadow-[0_10px_24px_rgba(54,69,79,0.035)] backdrop-blur-xl transition focus:border-cyan-200 focus:bg-white/90 focus:ring-4 focus:ring-cyan-100/45"
+              >
+                {patientPrescriptions.map((prescription) => {
+                  const remaining =
+                    prescription.prescribedSessions -
+                    prescription.completedSessions;
+
+                  return (
+                    <option key={prescription.id} value={prescription.id}>
+                      {prescription.title} · {remaining} restante
+                      {remaining > 1 ? "s" : ""}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+            {!patientPrescriptions.length && (
+              <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-2 text-xs font-semibold text-[#7b6745]">
+                Aucune prescription active
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {!appointment.hasSession && (
+            <button
+              type="button"
+              onClick={() => handleCreateSession(appointment)}
+              disabled={
+                creatingSessionAppointmentId === appointment.id ||
+                !patientPrescriptions.length
+              }
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-cyan-100/80 bg-cyan-50/70 px-3 py-2 text-xs font-semibold text-cyan-800/75 shadow-[0_10px_24px_rgba(8,145,178,0.045)] transition hover:-translate-y-px hover:bg-cyan-100/60 disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              <Icon name="calendar" className="h-3.5 w-3.5" />
+              {creatingSessionAppointmentId === appointment.id
+                ? "Création..."
+                : "Créer séance"}
+            </button>
+          )}
+          {canCompleteSession && linkedSession && (
+            <button
+              type="button"
+              onClick={() => handleCompleteSession(appointment)}
+              disabled={completingSessionId === linkedSession.id}
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68] shadow-[0_10px_24px_rgba(79,117,91,0.055)] transition hover:-translate-y-px hover:bg-[#e6f3e2] disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              <Icon name="check" className="h-3.5 w-3.5" />
+              {completingSessionId === linkedSession.id
+                ? "Validation..."
+                : "Marquer réalisée"}
+            </button>
+          )}
+          {linkedSession?.status === "COMPLETED" && (
+            <span className="inline-flex items-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68]">
+              <Icon name="check" className="h-3.5 w-3.5" />
+              Réalisée
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => router.push(`/dashboard/patients/${appointment.patient.id}`)}
+            className={cn(BUTTON_LIGHT, "px-3 py-2")}
+          >
+            Voir patient
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/dashboard/appointments")}
+            className={cn(BUTTON_LIGHT, "px-3 py-2")}
+          >
+            Voir rendez-vous
+          </button>
+        </div>
+      </article>
+    );
+  };
 
   return (
     <div className={cn(PAGE_BG, "min-h-screen text-black")}>
@@ -788,7 +1080,92 @@ export default function TodayDashboard() {
           </section>
         )}
 
-        <section className="mt-4 grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
+        <section className={cn(CARD, "mt-4 overflow-hidden")}>
+          <div className="flex items-end justify-between gap-4 border-b border-black/5 px-5 py-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                Priorités
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
+                Actions importantes
+              </h2>
+            </div>
+            <Icon name="spark" className="h-5 w-5 text-[#9a6657]/50" />
+          </div>
+
+          {loading ? (
+            <div className="grid gap-3 p-5 md:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="h-24 animate-pulse rounded-3xl bg-black/5"
+                />
+              ))}
+            </div>
+          ) : !importantActions.length ? (
+            <p className="px-5 py-8 text-sm font-medium text-black/45">
+              Rien d'urgent pour le moment.
+            </p>
+          ) : (
+            <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
+              {importantActions.map((action) => {
+                const copy = actionCopy(action);
+
+                return (
+                  <div
+                    key={`${action.type}-${action.prescription.id}`}
+                    className={cn("rounded-3xl border p-4", copy.tone)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em]">
+                          <Icon name={copy.icon} className="h-4 w-4" />
+                          {copy.label}
+                        </p>
+                        <p className="mt-3 font-semibold text-black/78">
+                          {patientName(action.patient)}
+                        </p>
+                        <p className="mt-1 line-clamp-1 text-xs font-medium text-black/45">
+                          {action.prescription.title}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-white/55 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/45">
+                        {action.remainingSessions} restante
+                        {action.remainingSessions > 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-xs font-medium text-black/45">
+                      {action.completedSessions} / {action.prescribedSessions}{" "}
+                      séances réalisées
+                    </p>
+                    {action.type === "DRAFT" ? (
+                      <button
+                        type="button"
+                        onClick={() => handleCreateDraft(action)}
+                        disabled={creatingDraftId === action.prescription.id}
+                        className={cn(BUTTON_DARK, "mt-4 px-3 py-2")}
+                      >
+                        {creatingDraftId === action.prescription.id
+                          ? "Creation..."
+                          : copy.action}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
+                        className={cn(BUTTON_LIGHT, "mt-4 px-3 py-2")}
+                      >
+                        {copy.action}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="mt-4">
           <div className={cn(CARD, "overflow-hidden")}>
             <div className="flex flex-col gap-4 border-b border-black/5 px-5 py-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
@@ -798,6 +1175,9 @@ export default function TodayDashboard() {
                 <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
                   Vue opérationnelle
                 </h2>
+                <p className="mt-1 text-sm font-semibold text-black/42">
+                  {agendaPeriodLabel}
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="rounded-full border border-white/70 bg-white/55 p-1 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl">
@@ -815,418 +1195,225 @@ export default function TodayDashboard() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setAgendaMode("threeDays")}
+                    onClick={() => setAgendaMode("week")}
                     className={cn(
                       "rounded-full px-4 py-2 text-xs font-semibold transition",
-                      agendaMode === "threeDays"
+                      agendaMode === "week"
                         ? "bg-cyan-50 text-cyan-800/80 shadow-sm"
                         : "text-black/45 hover:text-black"
                     )}
                   >
-                    3 jours
+                    Cette semaine
                   </button>
                 </div>
-                <label className="relative inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/70 bg-white/55 px-3 py-2 text-xs font-semibold text-black/55 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black">
-                  <Icon name="calendar" className="h-3.5 w-3.5 text-cyan-700/60" />
-                  <span className="capitalize">
-                    {formatSelectedDate(selectedAgendaDate)}
-                  </span>
-                  <input
-                    type="date"
-                    value={selectedAgendaDate}
-                    onChange={(event) => handleAgendaDateChange(event.target.value)}
-                    className="absolute inset-0 cursor-pointer opacity-0"
-                    aria-label="Choisir une date de départ"
-                  />
-                </label>
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="grid gap-4 p-5 lg:grid-cols-3">
-                {Array.from({ length: 6 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="h-44 animate-pulse rounded-3xl bg-black/5"
-                  />
-                ))}
-              </div>
-            ) : !visibleAppointmentCount ? (
-              <div className="px-5 py-16 text-center">
-                <p className="text-lg font-semibold tracking-[-0.03em]">
-                  {agendaMode === "today"
-                    ? "Aucun rendez-vous aujourd'hui."
-                    : "Aucun rendez-vous prévu sur cette période."}
-                </p>
-                <p className="mt-2 text-sm font-medium text-black/45">
-                  L'agenda est libre pour l'instant.
-                </p>
-              </div>
-            ) : (
-              <div
-                className={cn(
-                  "grid gap-4 p-5",
-                  agendaMode === "threeDays"
-                    ? "lg:grid-cols-3"
-                    : "lg:grid-cols-1"
-                )}
-              >
-                {visibleAgendaDays.map((day) => (
-                  <div
-                    key={day.date}
-                    className="rounded-[1.25rem] border border-white/70 bg-white/38 p-3 backdrop-blur-xl"
-                  >
-                    <div className="mb-3 flex items-end justify-between gap-3 px-1">
-                      <div>
-                        <p className="text-base font-bold capitalize tracking-[-0.03em]">
-                          {day.dayLabel}
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-black/38">
-                          {day.dateLabel}
-                        </p>
-                      </div>
-                      <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/42">
-                        {day.appointments.length} rdv
-                      </span>
-                    </div>
-
-                    {!day.appointments.length ? (
-                      <div className="rounded-3xl border border-white/60 bg-white/45 px-4 py-8 text-center text-sm font-medium text-black/42">
-                        {day.isToday
-                          ? "Aucun rendez-vous aujourd'hui."
-                          : "Aucun rendez-vous prévu."}
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {day.appointments.map((appointment) => {
-                          const linkedSession = appointment.linkedSession;
-                          const canCompleteSession = Boolean(
-                            linkedSession && linkedSession.status !== "COMPLETED"
-                          );
-                          const patientPrescriptions =
-                            activePrescriptionsForPatient(appointment.patient.id);
-                          const selectedPrescriptionId =
-                            selectedPrescriptionByAppointment[appointment.id] ||
-                            patientPrescriptions[0]?.id ||
-                            "";
-                          const visibleNotes = cleanCalendarNotes(
-                            appointment.notes
-                          );
-
-                          return (
-                            <article
-                              key={appointment.id}
-                              className="rounded-3xl border border-white/70 bg-white/65 p-4 shadow-[0_14px_34px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:-translate-y-px hover:bg-white/80"
-                            >
-                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                <div>
-                                  <p className="text-sm font-bold tracking-[-0.02em] text-cyan-900/75">
-                                    {formatTimeRange(
-                                      appointment.startsAt,
-                                      appointment.endsAt
-                                    )}
-                                  </p>
-                                  <h3 className="mt-2 text-lg font-semibold tracking-[-0.035em]">
-                                    {patientName(appointment.patient)}
-                                  </h3>
-                                </div>
-                                <div className="flex flex-wrap gap-2 sm:justify-end">
-                                  <span
-                                    className={cn(
-                                      "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
-                                      sourceTone(appointment.source)
-                                    )}
-                                  >
-                                    {appointment.source}
-                                  </span>
-                                  <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
-                                    {appointment.status}
-                                  </span>
-                                  <span
-                                    className={cn(
-                                      "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
-                                      sessionStateTone(appointment)
-                                    )}
-                                  >
-                                    {sessionStateLabel(appointment)}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {linkedSession?.prescription && (
-                                <div className="mt-4 rounded-2xl border border-cyan-100/70 bg-cyan-50/45 px-3 py-2">
-                                  <p className="text-xs font-semibold text-cyan-950/70">
-                                    {linkedSession.prescription.title}
-                                  </p>
-                                  <p className="mt-1 text-xs font-medium text-black/45">
-                                    Séance n°{linkedSession.sessionNumber} ·{" "}
-                                    {linkedSession.prescription.completedSessions} /{" "}
-                                    {linkedSession.prescription.prescribedSessions} réalisées
-                                  </p>
-                                </div>
-                              )}
-
-                              {visibleNotes && (
-                                <p className="mt-3 line-clamp-2 text-xs font-medium leading-5 text-black/42">
-                                  {visibleNotes}
-                                </p>
-                              )}
-
-                              {!appointment.hasSession && (
-                                <div className="mt-4 grid gap-2">
-                                  {patientPrescriptions.length > 1 && (
-                                    <select
-                                      value={selectedPrescriptionId}
-                                      onChange={(event) =>
-                                        setSelectedPrescriptionByAppointment(
-                                          (current) => ({
-                                            ...current,
-                                            [appointment.id]: event.target.value,
-                                          })
-                                        )
-                                      }
-                                      className="w-full rounded-full border border-white/80 bg-white/65 px-3 py-2 text-xs font-semibold text-black/65 outline-none shadow-[0_10px_24px_rgba(54,69,79,0.035)] backdrop-blur-xl transition focus:border-cyan-200 focus:bg-white/90 focus:ring-4 focus:ring-cyan-100/45"
-                                    >
-                                      {patientPrescriptions.map((prescription) => {
-                                        const remaining =
-                                          prescription.prescribedSessions -
-                                          prescription.completedSessions;
-
-                                        return (
-                                          <option
-                                            key={prescription.id}
-                                            value={prescription.id}
-                                          >
-                                            {prescription.title} · {remaining} restante
-                                            {remaining > 1 ? "s" : ""}
-                                          </option>
-                                        );
-                                      })}
-                                    </select>
-                                  )}
-                                  {!patientPrescriptions.length && (
-                                    <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-2 text-xs font-semibold text-[#7b6745]">
-                                      Aucune prescription active
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-
-                              <div className="mt-4 flex flex-wrap gap-2">
-                                {!appointment.hasSession && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCreateSession(appointment)}
-                                    disabled={
-                                      creatingSessionAppointmentId ===
-                                        appointment.id ||
-                                      !patientPrescriptions.length
-                                    }
-                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-cyan-100/80 bg-cyan-50/70 px-3 py-2 text-xs font-semibold text-cyan-800/75 shadow-[0_10px_24px_rgba(8,145,178,0.045)] transition hover:-translate-y-px hover:bg-cyan-100/60 disabled:cursor-not-allowed disabled:opacity-55"
-                                  >
-                                    <Icon name="calendar" className="h-3.5 w-3.5" />
-                                    {creatingSessionAppointmentId === appointment.id
-                                      ? "Création..."
-                                      : "Créer séance"}
-                                  </button>
-                                )}
-                                {canCompleteSession && linkedSession && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCompleteSession(appointment)}
-                                    disabled={completingSessionId === linkedSession.id}
-                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68] shadow-[0_10px_24px_rgba(79,117,91,0.055)] transition hover:-translate-y-px hover:bg-[#e6f3e2] disabled:cursor-not-allowed disabled:opacity-55"
-                                  >
-                                    <Icon name="check" className="h-3.5 w-3.5" />
-                                    {completingSessionId === linkedSession.id
-                                      ? "Validation..."
-                                      : "Marquer réalisée"}
-                                  </button>
-                                )}
-                                {linkedSession?.status === "COMPLETED" && (
-                                  <span className="inline-flex items-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68]">
-                                    <Icon name="check" className="h-3.5 w-3.5" />
-                                    Réalisée
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    router.push(
-                                      `/dashboard/patients/${appointment.patient.id}`
-                                    )
-                                  }
-                                  className={cn(BUTTON_LIGHT, "px-3 py-2")}
-                                >
-                                  Voir patient
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => router.push("/dashboard/appointments")}
-                                  className={cn(BUTTON_LIGHT, "px-3 py-2")}
-                                >
-                                  Voir rendez-vous
-                                </button>
-                              </div>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className={cn(CARD, "overflow-hidden")}>
-            <div className="flex items-end justify-between gap-4 border-b border-black/5 px-5 py-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
-                  Priorités
-                </p>
-                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
-                  Actions importantes
-                </h2>
-              </div>
-              <Icon name="spark" className="h-5 w-5 text-[#9a6657]/50" />
-            </div>
-
-            {loading ? (
-              <div className="space-y-3 p-5">
-                {Array.from({ length: 3 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="h-24 animate-pulse rounded-3xl bg-black/5"
-                  />
-                ))}
-              </div>
-            ) : !importantActions.length ? (
-              <p className="px-5 py-12 text-sm font-medium text-black/45">
-                Rien d'urgent pour le moment.
-              </p>
-            ) : (
-              <div className="space-y-3 p-5">
-                {importantActions.map((action) => {
-                  const copy = actionCopy(action);
-
-                  return (
-                    <div
-                      key={`${action.type}-${action.prescription.id}`}
-                      className={cn("rounded-3xl border p-4", copy.tone)}
+                {agendaMode === "today" ? (
+                  <label className="relative inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/70 bg-white/55 px-3 py-2 text-xs font-semibold text-black/55 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black">
+                    <Icon name="calendar" className="h-3.5 w-3.5 text-cyan-700/60" />
+                    <span className="capitalize">
+                      {formatSelectedDate(selectedAgendaDate)}
+                    </span>
+                    <input
+                      type="date"
+                      value={selectedAgendaDate}
+                      onChange={(event) => handleAgendaDateChange(event.target.value)}
+                      className="absolute inset-0 cursor-pointer opacity-0"
+                      aria-label="Choisir une date"
+                    />
+                  </label>
+                ) : (
+                  <div className="inline-flex items-center gap-1 rounded-full border border-white/70 bg-white/55 p-1 text-xs font-semibold text-black/58 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl">
+                    <button
+                      type="button"
+                      onClick={() => handleWeekShift(-7)}
+                      disabled={refreshing}
+                      className="flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-cyan-50 hover:text-cyan-800/80 disabled:opacity-45"
+                      aria-label="Semaine précédente"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em]">
-                            <Icon name={copy.icon} className="h-4 w-4" />
-                            {copy.label}
+                      ←
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCurrentWeek}
+                      disabled={refreshing}
+                      className="rounded-full px-3 py-2 transition hover:bg-white/70 hover:text-black disabled:opacity-45"
+                    >
+                      {formatWeekNavigationLabel(data)}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleWeekShift(7)}
+                      disabled={refreshing}
+                      className="flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-cyan-50 hover:text-cyan-800/80 disabled:opacity-45"
+                      aria-label="Semaine suivante"
+                    >
+                      →
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="grid gap-4 p-5 lg:grid-cols-4">
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="h-32 animate-pulse rounded-3xl bg-black/5"
+                  />
+                ))}
+              </div>
+            ) : agendaMode === "today" ? (
+              !visibleAppointmentCount ? (
+                <div className="px-5 py-16 text-center">
+                  <p className="text-lg font-semibold tracking-[-0.03em]">
+                    Aucun rendez-vous prévu ce jour.
+                  </p>
+                  <p className="mt-2 text-sm font-medium text-black/45">
+                    L'agenda est libre pour l'instant.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-4 p-5">
+                  {visibleAgendaDays[0]?.appointments.map(renderDetailedAppointment)}
+                </div>
+              )
+            ) : (
+              <div className="p-5">
+                {!hasWeekAppointments && (
+                  <div className="mb-4 rounded-3xl border border-white/70 bg-white/50 px-5 py-4 text-sm font-semibold text-black/45 backdrop-blur-xl">
+                    Aucun rendez-vous prévu cette semaine.
+                  </div>
+                )}
+                <div className="overflow-x-auto pb-2">
+                  <div className="min-w-[980px]">
+                    <div className="grid grid-cols-[64px_repeat(6,minmax(140px,1fr))] gap-2">
+                      <div />
+                      {visibleAgendaDays.map((day) => (
+                        <div
+                          key={day.date}
+                          className="rounded-2xl border border-white/70 bg-white/52 px-3 py-2 text-center backdrop-blur-xl"
+                        >
+                          <p className="text-xs font-bold capitalize tracking-[-0.02em] text-black/70">
+                            {day.dayLabel}
                           </p>
-                          <p className="mt-3 font-semibold text-black/78">
-                            {patientName(action.patient)}
-                          </p>
-                          <p className="mt-1 text-xs font-medium text-black/45">
-                            {action.prescription.title}
+                          <p className="mt-1 text-[11px] font-semibold text-black/38">
+                            {day.dateLabel}
                           </p>
                         </div>
-                        <span className="rounded-full bg-white/55 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/45">
-                          {action.remainingSessions} restante
-                          {action.remainingSessions > 1 ? "s" : ""}
-                        </span>
-                      </div>
-                      <p className="mt-3 text-xs font-medium text-black/45">
-                        {action.completedSessions} / {action.prescribedSessions}{" "}
-                        séances réalisées
-                      </p>
-                      {action.type === "DRAFT" ? (
-                        <button
-                          type="button"
-                          onClick={() => handleCreateDraft(action)}
-                          disabled={creatingDraftId === action.prescription.id}
-                          className={cn(BUTTON_DARK, "mt-4 px-3 py-2")}
-                        >
-                          {creatingDraftId === action.prescription.id
-                            ? "Creation..."
-                            : copy.action}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            router.push(`/dashboard/invoices${entityQuery}`)
-                          }
-                          className={cn(BUTTON_LIGHT, "mt-4 px-3 py-2")}
-                        >
-                          {copy.action}
-                        </button>
-                      )}
+                      ))}
                     </div>
-                  );
-                })}
+
+                    <div
+                      className="mt-2 grid grid-cols-[64px_repeat(6,minmax(140px,1fr))] gap-2"
+                      style={{ height: WEEK_GRID_HEIGHT }}
+                    >
+                      <div className="relative">
+                        {agendaHours.map((hour, index) => (
+                          <div
+                            key={hour}
+                            className="absolute left-0 right-2 text-right text-[11px] font-semibold text-black/32"
+                            style={{
+                              top: `${(index / (agendaHours.length - 1)) * 100}%`,
+                              transform: "translateY(-50%)",
+                            }}
+                          >
+                            {`${hour}`.padStart(2, "0")}:00
+                          </div>
+                        ))}
+                      </div>
+
+                      {visibleAgendaDays.map((day) => (
+                        <div
+                          key={day.date}
+                          className="relative overflow-hidden rounded-[1.15rem] border border-white/70 bg-white/34 backdrop-blur-xl"
+                        >
+                          {agendaHours.slice(0, -1).map((hour) => (
+                            <div
+                              key={hour}
+                              className="h-14 border-b border-white/55 bg-white/12 transition hover:bg-cyan-50/22"
+                            />
+                          ))}
+
+                          {day.appointments.map((appointment) => {
+                            const canCompleteSession = Boolean(
+                              appointment.linkedSession &&
+                                appointment.linkedSession.status !== "COMPLETED"
+                            );
+                            const patientPrescriptions =
+                              activePrescriptionsForPatient(appointment.patient.id);
+
+                            return (
+                              <div
+                                key={appointment.id}
+                                className={cn(
+                                  "absolute left-1.5 right-1.5 overflow-hidden rounded-2xl border px-2.5 py-2 text-left shadow-[0_10px_24px_rgba(54,69,79,0.05)] backdrop-blur-xl transition hover:z-10 hover:scale-[1.015]",
+                                  weekAppointmentTone(appointment)
+                                )}
+                                style={weekEventStyle(appointment)}
+                              >
+                                <p className="text-[11px] font-bold leading-none">
+                                  {formatTime(appointment.startsAt)}
+                                </p>
+                                <p className="mt-1 truncate text-xs font-bold tracking-[-0.02em]">
+                                  {patientName(appointment.patient)}
+                                </p>
+                                <p className="mt-1 truncate text-[10px] font-semibold opacity-65">
+                                  {appointment.hasSession
+                                    ? sessionStateLabel(appointment)
+                                    : "Séance non créée"}
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-1">
+                                  {!appointment.hasSession && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCreateSession(appointment)}
+                                      disabled={
+                                        creatingSessionAppointmentId ===
+                                          appointment.id ||
+                                        !patientPrescriptions.length
+                                      }
+                                      className="rounded-full bg-white/55 px-2 py-1 text-[10px] font-bold text-black/55 transition hover:bg-white/80 disabled:opacity-45"
+                                    >
+                                      Créer
+                                    </button>
+                                  )}
+                                  {canCompleteSession &&
+                                    appointment.linkedSession && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleCompleteSession(appointment)
+                                        }
+                                        disabled={
+                                          completingSessionId ===
+                                          appointment.linkedSession.id
+                                        }
+                                        className="rounded-full bg-white/55 px-2 py-1 text-[10px] font-bold text-black/55 transition hover:bg-white/80 disabled:opacity-45"
+                                      >
+                                        Réalisée
+                                      </button>
+                                    )}
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      router.push("/dashboard/appointments")
+                                    }
+                                    className="rounded-full bg-white/55 px-2 py-1 text-[10px] font-bold text-black/55 transition hover:bg-white/80"
+                                  >
+                                    Voir
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
-        </section>
-
-        <section className={cn(CARD, "mt-4 overflow-hidden")}>
-          <div className="flex items-end justify-between gap-4 border-b border-black/5 px-5 py-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
-                À venir
-              </p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
-                Prochains rendez-vous
-              </h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/appointments")}
-              className={BUTTON_LIGHT}
-            >
-              Voir les rendez-vous
-            </button>
-          </div>
-
-          {loading ? (
-            <div className="grid gap-3 p-5 md:grid-cols-2">
-              {Array.from({ length: 4 }).map((_, index) => (
-                <div
-                  key={index}
-                  className="h-24 animate-pulse rounded-3xl bg-black/5"
-                />
-              ))}
-            </div>
-          ) : !data?.upcomingAppointments.length ? (
-            <p className="px-5 py-12 text-sm font-medium text-black/45">
-              Aucun rendez-vous à venir pour l'instant.
-            </p>
-          ) : (
-            <div className="grid gap-3 p-5 md:grid-cols-2">
-              {data.upcomingAppointments.map((appointment) => (
-                <div
-                  key={appointment.id}
-                  className="rounded-3xl border border-white/70 bg-white/50 p-4 backdrop-blur-xl transition hover:bg-white/75"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="font-semibold tracking-[-0.02em]">
-                        {patientName(appointment.patient)}
-                      </p>
-                      <p className="mt-1 text-xs font-medium text-black/45">
-                        {appointment.hasSession && appointment.linkedSession
-                          ? `Séance n°${appointment.linkedSession.sessionNumber}`
-                          : "À transformer en séance"}
-                        {" · "}
-                        {appointment.source}
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-cyan-50 px-3 py-1 text-[10px] font-semibold text-cyan-800/65">
-                      {formatSessionDate(appointment.startsAt)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </section>
       </main>
     </div>

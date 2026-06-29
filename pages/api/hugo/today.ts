@@ -156,7 +156,21 @@ const parseDateParam = (value: string | null) => {
 
 const parseDaysParam = (value: string | null) => {
   const parsed = value ? Number(value) : 3;
-  return parsed === 1 || parsed === 3 ? parsed : 3;
+  return parsed === 1 || parsed === 3 || parsed === 6 || parsed === 7
+    ? parsed
+    : 3;
+};
+
+const parseModeParam = (value: string | null) => {
+  return value === "week" ? "week" : "today";
+};
+
+const startOfWeek = (date: Date) => {
+  const value = startOfDay(date);
+  const day = value.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  value.setDate(value.getDate() + mondayOffset);
+  return value;
 };
 
 const sortAppointmentsByStart = <
@@ -199,11 +213,15 @@ const getToday = async (
 
   const now = new Date();
   const requestedDate = parseDateParam(getQueryString(req.query.date));
-  const requestedDays = parseDaysParam(getQueryString(req.query.days));
+  const requestedMode = parseModeParam(getQueryString(req.query.mode));
+  const requestedDays =
+    requestedMode === "week" ? 6 : parseDaysParam(getQueryString(req.query.days));
   const includeDebug = getQueryString(req.query.debug) === "1";
-  const selectedStart = requestedDate || startOfDay(now);
-  const selectedEnd = addDays(selectedStart, 1);
-  const endOfAgendaWindow = addDays(selectedStart, requestedDays);
+  const selectedDayStart = requestedDate || startOfDay(now);
+  const selectedDayEnd = addDays(selectedDayStart, 1);
+  const agendaStart =
+    requestedMode === "week" ? startOfWeek(selectedDayStart) : selectedDayStart;
+  const endOfAgendaWindow = addDays(agendaStart, requestedDays);
 
   const [
     todayAppointments,
@@ -218,8 +236,8 @@ const getToday = async (
       where: {
         entityId: cabinet.cabinetId,
         startsAt: {
-          gte: selectedStart,
-          lt: selectedEnd,
+          gte: selectedDayStart,
+          lt: selectedDayEnd,
         },
       },
       select: appointmentSelect,
@@ -229,7 +247,7 @@ const getToday = async (
       where: {
         entityId: cabinet.cabinetId,
         startsAt: {
-          gte: selectedStart,
+          gte: agendaStart,
           lt: endOfAgendaWindow,
         },
       },
@@ -367,7 +385,7 @@ const getToday = async (
     new Map<string, typeof serializedAgendaAppointments>()
   );
   const agendaDays = Array.from({ length: requestedDays }).map((_, index) => {
-    const dayStart = addDays(selectedStart, index);
+    const dayStart = addDays(agendaStart, index);
     const dateKey = toDateKey(dayStart);
     const appointments = agendaAppointmentsByDate.get(dateKey) || [];
 
@@ -391,7 +409,10 @@ const getToday = async (
       name: cabinet.cabinetName,
       lastAppleCalendarSync: lastAppleConnection?.lastSyncedAt?.toISOString() || null,
     },
-    selectedDate: toDateKey(selectedStart),
+    selectedDate: toDateKey(selectedDayStart),
+    agendaStartDate: toDateKey(agendaStart),
+    agendaEndDate: toDateKey(addDays(endOfAgendaWindow, -1)),
+    mode: requestedMode,
     days: requestedDays,
     todayAppointments: serializedTodayAppointments,
     upcomingAppointments: serializedUpcomingAppointments,
@@ -407,9 +428,12 @@ const getToday = async (
     ...(includeDebug
       ? {
           debug: {
-            requestedDate: toDateKey(selectedStart),
+            requestedDate: toDateKey(selectedDayStart),
+            agendaStartDate: toDateKey(agendaStart),
+            agendaEndDate: toDateKey(addDays(endOfAgendaWindow, -1)),
             requestedDays,
-            windowStart: selectedStart.toISOString(),
+            mode: requestedMode,
+            windowStart: agendaStart.toISOString(),
             windowEnd: endOfAgendaWindow.toISOString(),
             appointmentCount: serializedAgendaAppointments.length,
             agendaDayCounts: agendaDays.map((day) => ({
