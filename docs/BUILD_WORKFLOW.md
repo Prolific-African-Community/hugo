@@ -108,6 +108,13 @@ Chaque futur prompt Codex lie au planning doit preciser :
 - risque de desynchronisation
 - validation build obligatoire
 
+### Cron Apple Calendar
+
+Le cron de synchronisation sortante Apple Calendar doit rester controle :
+- `CRON_SECRET` doit etre configure dans les variables d'environnement Vercel.
+- Le cron ne doit jamais exposer les secrets CalDAV.
+- Le traitement automatique reutilise les validations du helper de push et ne remplace pas les controles manuels.
+
 ## Workflow de validation
 
 Apres chaque run :
