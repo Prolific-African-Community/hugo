@@ -1,9 +1,15 @@
 import {
+  CalendarConnectionStatus,
+  CalendarProvider,
   CalendarSyncActionStatus,
   CalendarSyncActionType,
 } from "@prisma/client";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { jsonSuccess } from "../../../lib/accounting-api";
+import {
+  CalendarPullSyncError,
+  pullCalendarConnectionEvents,
+} from "../../../lib/calendar-pull-sync";
 import {
   CalendarSyncActionPushError,
   pushCalendarSyncAction,
@@ -65,7 +71,7 @@ export default async function handler(
       },
     });
 
-    const results = [];
+    const pushResults = [];
 
     for (const action of actions) {
       const freshAction = await prisma.calendarSyncAction.findUnique({
@@ -76,7 +82,7 @@ export default async function handler(
       });
 
       if (freshAction?.status !== CalendarSyncActionStatus.PENDING) {
-        results.push({
+        pushResults.push({
           actionId: action.id,
           actionType: action.actionType,
           status: freshAction?.status || "MISSING",
@@ -90,7 +96,7 @@ export default async function handler(
       try {
         const result = await pushCalendarSyncAction(action.id, action.entityId);
 
-        results.push({
+        pushResults.push({
           actionId: action.id,
           actionType: action.actionType,
           status: result.status,
@@ -99,7 +105,7 @@ export default async function handler(
           error: null,
         });
       } catch (error) {
-        results.push({
+        pushResults.push({
           actionId: action.id,
           actionType: action.actionType,
           status: CalendarSyncActionStatus.FAILED,
@@ -114,18 +120,82 @@ export default async function handler(
       }
     }
 
-    const doneCount = results.filter((result) => result.success).length;
-    const skippedCount = results.filter((result) => result.skipped).length;
-    const failedCount = results.filter(
+    const pushDoneCount = pushResults.filter((result) => result.success).length;
+    const pushSkippedCount = pushResults.filter((result) => result.skipped).length;
+    const pushFailedCount = pushResults.filter(
       (result) => !result.success && !result.skipped
     ).length;
 
+    const connections = await prisma.calendarConnection.findMany({
+      where: {
+        provider: CalendarProvider.APPLE_CALENDAR,
+        status: CalendarConnectionStatus.CONNECTED,
+        calendarUrl: {
+          not: "",
+        },
+      },
+      orderBy: { updatedAt: "asc" },
+      take: 20,
+      select: {
+        id: true,
+        entityId: true,
+        name: true,
+      },
+    });
+
+    const pullResults = [];
+
+    for (const connection of connections) {
+      try {
+        const result = await pullCalendarConnectionEvents({
+          connectionId: connection.id,
+          cabinetId: connection.entityId,
+        });
+
+        pullResults.push({
+          connectionId: connection.id,
+          name: connection.name,
+          success: true,
+          importedCount: result.importedCount,
+          updatedCount: result.updatedCount,
+          unmatchedCount: result.unmatchedCount,
+          skippedCount: result.skippedCount,
+          error: null,
+        });
+      } catch (error) {
+        pullResults.push({
+          connectionId: connection.id,
+          name: connection.name,
+          success: false,
+          importedCount: 0,
+          updatedCount: 0,
+          unmatchedCount: 0,
+          skippedCount: 0,
+          error:
+            error instanceof CalendarPullSyncError || error instanceof Error
+              ? error.message
+              : "Impossible de synchroniser Apple Calendar vers Hugo",
+        });
+      }
+    }
+
+    const pullSuccessCount = pullResults.filter((result) => result.success).length;
+    const pullFailedCount = pullResults.filter((result) => !result.success).length;
+
     return jsonSuccess(res, {
-      processedCount: results.length,
-      doneCount,
-      failedCount,
-      skippedCount,
-      results,
+      push: {
+        processedCount: pushResults.length,
+        doneCount: pushDoneCount,
+        failedCount: pushFailedCount,
+        skippedCount: pushSkippedCount,
+        results: pushResults,
+      },
+      pull: {
+        processedConnections: pullResults.length,
+        successCount: pullSuccessCount,
+        failedCount: pullFailedCount,
+        results: pullResults,
+      },
     });
   } catch (error) {
     console.error("HUGO CRON CALENDAR SYNC ERROR:", error);
