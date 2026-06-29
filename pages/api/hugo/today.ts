@@ -1,6 +1,10 @@
 import type { NextApiResponse } from "next";
 import { Prisma } from "@prisma/client";
-import { jsonError, jsonSuccess } from "../../../lib/accounting-api";
+import {
+  getQueryString,
+  jsonError,
+  jsonSuccess,
+} from "../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../lib/auth";
 import { cleanCalendarNotes } from "../../../lib/hugo-display";
 import { requireHugoCabinet } from "../../../lib/hugo-auth";
@@ -133,9 +137,45 @@ const addDays = (date: Date, days: number) => {
   return value;
 };
 
-const dayLabel = (date: Date, index: number) => {
-  if (index === 0) return "Aujourd'hui";
-  if (index === 1) return "Demain";
+const toDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateParam = (value: string | null) => {
+  if (!value) return null;
+
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : startOfDay(date);
+};
+
+const parseDaysParam = (value: string | null) => {
+  const parsed = value ? Number(value) : 3;
+  return parsed === 1 || parsed === 3 ? parsed : 3;
+};
+
+const sortAppointmentsByStart = <
+  T extends { startsAt: Date | string }
+>(
+  appointments: T[]
+) => {
+  return [...appointments].sort(
+    (left, right) =>
+      new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()
+  );
+};
+
+const dayLabel = (date: Date) => {
+  const today = startOfDay(new Date());
+  const tomorrow = addDays(today, 1);
+
+  if (toDateKey(date) === toDateKey(today)) return "Aujourd'hui";
+  if (toDateKey(date) === toDateKey(tomorrow)) return "Demain";
 
   return new Intl.DateTimeFormat("fr-LU", { weekday: "long" }).format(date);
 };
@@ -158,9 +198,12 @@ const getToday = async (
   }
 
   const now = new Date();
-  const startOfToday = startOfDay(now);
-  const endOfToday = addDays(startOfToday, 1);
-  const endOfAgendaWindow = addDays(startOfToday, 3);
+  const requestedDate = parseDateParam(getQueryString(req.query.date));
+  const requestedDays = parseDaysParam(getQueryString(req.query.days));
+  const includeDebug = getQueryString(req.query.debug) === "1";
+  const selectedStart = requestedDate || startOfDay(now);
+  const selectedEnd = addDays(selectedStart, 1);
+  const endOfAgendaWindow = addDays(selectedStart, requestedDays);
 
   const [
     todayAppointments,
@@ -175,8 +218,8 @@ const getToday = async (
       where: {
         entityId: cabinet.cabinetId,
         startsAt: {
-          gte: startOfToday,
-          lt: endOfToday,
+          gte: selectedStart,
+          lt: selectedEnd,
         },
       },
       select: appointmentSelect,
@@ -186,7 +229,7 @@ const getToday = async (
       where: {
         entityId: cabinet.cabinetId,
         startsAt: {
-          gte: startOfToday,
+          gte: selectedStart,
           lt: endOfAgendaWindow,
         },
       },
@@ -313,19 +356,27 @@ const getToday = async (
   const serializedUpcomingAppointments = upcomingAppointments.map(
     serializeAppointment
   );
-  const agendaDays = Array.from({ length: 3 }).map((_, index) => {
-    const dayStart = addDays(startOfToday, index);
-    const nextDayStart = addDays(dayStart, 1);
+  const agendaAppointmentsByDate = serializedAgendaAppointments.reduce(
+    (groups, appointment) => {
+      const dateKey = toDateKey(new Date(appointment.startsAt));
+      const currentAppointments = groups.get(dateKey) || [];
+      currentAppointments.push(appointment);
+      groups.set(dateKey, currentAppointments);
+      return groups;
+    },
+    new Map<string, typeof serializedAgendaAppointments>()
+  );
+  const agendaDays = Array.from({ length: requestedDays }).map((_, index) => {
+    const dayStart = addDays(selectedStart, index);
+    const dateKey = toDateKey(dayStart);
+    const appointments = agendaAppointmentsByDate.get(dateKey) || [];
 
     return {
-      date: dayStart.toISOString(),
-      dayLabel: dayLabel(dayStart, index),
+      date: dateKey,
+      dayLabel: dayLabel(dayStart),
       dateLabel: formatAgendaDate(dayStart),
-      isToday: index === 0,
-      appointments: serializedAgendaAppointments.filter((appointment) => {
-        const startsAt = new Date(appointment.startsAt);
-        return startsAt >= dayStart && startsAt < nextDayStart;
-      }),
+      isToday: toDateKey(dayStart) === toDateKey(startOfDay(now)),
+      appointments: sortAppointmentsByStart(appointments),
     };
   });
   const sessionsAlreadyCreatedToday = serializedTodayAppointments.filter(
@@ -340,6 +391,8 @@ const getToday = async (
       name: cabinet.cabinetName,
       lastAppleCalendarSync: lastAppleConnection?.lastSyncedAt?.toISOString() || null,
     },
+    selectedDate: toDateKey(selectedStart),
+    days: requestedDays,
     todayAppointments: serializedTodayAppointments,
     upcomingAppointments: serializedUpcomingAppointments,
     agendaDays,
@@ -351,6 +404,21 @@ const getToday = async (
       invoicesToPrepare: draftPrescriptions.length,
       invoicesReady: readyPrescriptions.length,
     },
+    ...(includeDebug
+      ? {
+          debug: {
+            requestedDate: toDateKey(selectedStart),
+            requestedDays,
+            windowStart: selectedStart.toISOString(),
+            windowEnd: endOfAgendaWindow.toISOString(),
+            appointmentCount: serializedAgendaAppointments.length,
+            agendaDayCounts: agendaDays.map((day) => ({
+              date: day.date,
+              count: day.appointments.length,
+            })),
+          },
+        }
+      : {}),
   });
 };
 
