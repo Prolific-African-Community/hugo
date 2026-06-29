@@ -57,6 +57,7 @@ const calendarConnectionSelect = {
       status: true,
       error: true,
       createdAt: true,
+      payload: true,
       appointment: {
         select: {
           id: true,
