@@ -319,7 +319,7 @@ export default function AppointmentsDashboardPage() {
 
   const loadAppointments = async (nextFilter = filter) => {
     const data = await request<Appointment[]>(
-      `/api/hugo/appointments?filter=${nextFilter}`
+      `/api/hugo/appointments?range=${nextFilter}`
     );
     setAppointments(data);
   };
@@ -343,7 +343,7 @@ export default function AppointmentsDashboardPage() {
             cabinetData.cabinetId
           )}`
         ),
-        request<Appointment[]>("/api/hugo/appointments?filter=today"),
+        request<Appointment[]>("/api/hugo/appointments?range=today"),
       ]);
 
       setPatients(patientData);
@@ -614,6 +614,12 @@ export default function AppointmentsDashboardPage() {
     if (filter === "today") return "Aujourd'hui";
     if (filter === "week") return "Cette semaine";
     return "À venir";
+  }, [filter]);
+
+  const emptyAppointmentsMessage = useMemo(() => {
+    if (filter === "today") return "Aucun rendez-vous aujourd'hui.";
+    if (filter === "week") return "Aucun rendez-vous cette semaine.";
+    return "Aucun rendez-vous à venir.";
   }, [filter]);
 
   return (
@@ -947,10 +953,10 @@ export default function AppointmentsDashboardPage() {
             ) : !appointments.length ? (
               <div className="px-5 py-16 text-center">
                 <p className="text-lg font-semibold tracking-[-0.03em]">
-                  Aucun rendez-vous.
+                  {emptyAppointmentsMessage}
                 </p>
                 <p className="mt-2 text-sm font-medium text-black/45">
-                  Les futures synchronisations alimenteront cette vue.
+                  Changez de période ou synchronisez Apple Calendar.
                 </p>
               </div>
             ) : (

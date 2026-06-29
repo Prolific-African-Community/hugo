@@ -90,6 +90,8 @@ interface TodaySummary {
 
 interface TodayPayload {
   cabinet: Cabinet;
+  selectedDate: string;
+  days: number;
   todayAppointments: TodayAppointment[];
   upcomingAppointments: TodayAppointment[];
   agendaDays: AgendaDay[];
@@ -270,6 +272,26 @@ function formatTodayDate() {
   }).format(new Date());
 }
 
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatSelectedDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat("fr-LU", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+      }).format(date);
+}
+
 function formatDateTime(value?: string | null) {
   if (!value) return "Jamais";
 
@@ -386,6 +408,9 @@ export default function TodayDashboard() {
   const [creatingSessionAppointmentId, setCreatingSessionAppointmentId] =
     useState<string | null>(null);
   const [agendaMode, setAgendaMode] = useState<AgendaMode>("today");
+  const [selectedAgendaDate, setSelectedAgendaDate] = useState(() =>
+    toDateInputValue(new Date())
+  );
   const [selectedPrescriptionByAppointment, setSelectedPrescriptionByAppointment] =
     useState<Record<string, string>>({});
   const [completingSessionId, setCompletingSessionId] = useState<string | null>(
@@ -425,13 +450,16 @@ export default function TodayDashboard() {
     return payload.data as T;
   };
 
-  const loadToday = async (showRefresh = false) => {
+  const loadToday = async (showRefresh = false, date = selectedAgendaDate) => {
     if (showRefresh) setRefreshing(true);
     setError(null);
     if (showRefresh) setSuccess(null);
 
     try {
-      const todayData = await request<TodayPayload>("/api/hugo/today");
+      const days = agendaMode === "today" ? 1 : 3;
+      const todayData = await request<TodayPayload>(
+        `/api/hugo/today?date=${encodeURIComponent(date)}&days=${days}`
+      );
       setData(todayData);
 
       const prescriptionData = await request<Prescription[]>(
@@ -570,7 +598,12 @@ export default function TodayDashboard() {
   useEffect(() => {
     if (!router.isReady) return;
     loadToday();
-  }, [router.isReady]);
+  }, [router.isReady, agendaMode]);
+
+  const handleAgendaDateChange = async (date: string) => {
+    setSelectedAgendaDate(date);
+    await loadToday(true, date);
+  };
 
   const entityQuery = data?.cabinet
     ? `?entityId=${encodeURIComponent(data.cabinet.cabinetId)}`
@@ -674,6 +707,7 @@ export default function TodayDashboard() {
               </p>
               <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-black/38">
                 <span className="capitalize">{formatTodayDate()}</span>
+                <span>· Période affichée {formatSelectedDate(selectedAgendaDate)}</span>
                 {data?.cabinet.lastAppleCalendarSync && (
                   <span>
                     · Sync Apple {formatDateTime(data.cabinet.lastAppleCalendarSync)}
@@ -684,7 +718,7 @@ export default function TodayDashboard() {
 
             <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[560px]">
               <StatPill
-                label="Rendez-vous aujourd'hui"
+                label="Rendez-vous du jour"
                 value={loading ? "..." : data?.summary.appointmentsToday ?? 0}
                 tone="border-[#dcebd7]/80 bg-[#eef6ec]/80 text-[#4f755b]"
               />
@@ -792,7 +826,19 @@ export default function TodayDashboard() {
                     3 jours
                   </button>
                 </div>
-                <Icon name="calendar" className="h-5 w-5 text-cyan-700/45" />
+                <label className="relative inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/70 bg-white/55 px-3 py-2 text-xs font-semibold text-black/55 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black">
+                  <Icon name="calendar" className="h-3.5 w-3.5 text-cyan-700/60" />
+                  <span className="capitalize">
+                    {formatSelectedDate(selectedAgendaDate)}
+                  </span>
+                  <input
+                    type="date"
+                    value={selectedAgendaDate}
+                    onChange={(event) => handleAgendaDateChange(event.target.value)}
+                    className="absolute inset-0 cursor-pointer opacity-0"
+                    aria-label="Choisir une date de départ"
+                  />
+                </label>
               </div>
             </div>
 

@@ -99,18 +99,18 @@ const getNullableString = (value: unknown) => {
   return trimmed ? trimmed : null;
 };
 
-const dateRangeForFilter = (filter: string | null) => {
+const dateRangeForRange = (range: string | null) => {
   const now = new Date();
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
 
-  if (filter === "today") {
+  if (range === "today") {
     const endOfToday = new Date(startOfToday);
     endOfToday.setDate(endOfToday.getDate() + 1);
     return { gte: startOfToday, lt: endOfToday };
   }
 
-  if (filter === "week") {
+  if (range === "week") {
     const endOfWeek = new Date(startOfToday);
     endOfWeek.setDate(endOfWeek.getDate() + 7);
     return { gte: startOfToday, lt: endOfWeek };
@@ -129,7 +129,8 @@ const listAppointments = async (
     return jsonError(res, 404, "Cabinet not found");
   }
 
-  const filter = getQueryString(req.query.filter);
+  const range =
+    getQueryString(req.query.range) || getQueryString(req.query.filter);
   const patientId = getQueryString(req.query.patientId);
 
   if (patientId) {
@@ -146,7 +147,7 @@ const listAppointments = async (
   const appointments = await prisma.appointment.findMany({
     where: {
       entityId: cabinet.cabinetId,
-      startsAt: dateRangeForFilter(filter),
+      startsAt: dateRangeForRange(range),
       ...(patientId ? { patientId } : {}),
     },
     include: appointmentInclude,
