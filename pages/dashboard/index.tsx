@@ -378,6 +378,19 @@ function formatDateTime(value?: string | null) {
       }).format(date);
 }
 
+function formatAppointmentDate(value?: string | null) {
+  if (!value) return "Date à définir";
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Date à définir"
+    : new Intl.DateTimeFormat("fr-LU", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+      }).format(date);
+}
+
 function formatTime(value?: string | null) {
   if (!value) return "--:--";
 
@@ -555,6 +568,9 @@ export default function TodayDashboard() {
   const [selectedAgendaDate, setSelectedAgendaDate] = useState(() =>
     toDateInputValue(new Date())
   );
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState<
+    string | null
+  >(null);
   const [selectedPrescriptionByAppointment, setSelectedPrescriptionByAppointment] =
     useState<Record<string, string>>({});
   const [completingSessionId, setCompletingSessionId] = useState<string | null>(
@@ -746,6 +762,18 @@ export default function TodayDashboard() {
     loadToday();
   }, [router.isReady, agendaMode]);
 
+  // Fermeture du panneau detail au clavier (Escape).
+  useEffect(() => {
+    if (!selectedAppointmentId) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedAppointmentId(null);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedAppointmentId]);
+
   const handleAgendaDateChange = async (date: string) => {
     setSelectedAgendaDate(date);
     await loadToday(true, date);
@@ -785,6 +813,19 @@ export default function TodayDashboard() {
       ),
     [visibleAgendaDays]
   );
+
+  // Le rendez-vous selectionne est resolu par id depuis les donnees fraiches :
+  // s'il n'existe plus apres un refresh, le panneau se ferme proprement.
+  const selectedAppointment = useMemo(() => {
+    if (!selectedAppointmentId) return null;
+    for (const day of data?.agendaDays || []) {
+      const found = day.appointments.find(
+        (appointment) => appointment.id === selectedAppointmentId
+      );
+      if (found) return found;
+    }
+    return null;
+  }, [data?.agendaDays, selectedAppointmentId]);
 
   const todayAppointments = data?.agendaDays?.[0]?.appointments || [];
   const sessionsToDoToday = todayAppointments.filter(
@@ -1414,12 +1455,18 @@ export default function TodayDashboard() {
                             )}
 
                             {day.appointments.map((appointment) => (
-                              <div
+                              <button
                                 key={appointment.id}
+                                type="button"
+                                onClick={() =>
+                                  setSelectedAppointmentId(appointment.id)
+                                }
                                 className={cn(
-                                  "absolute left-1 right-1 flex flex-col overflow-hidden rounded-lg border px-2 py-1 text-left shadow-[0_6px_16px_rgba(54,69,79,0.06)] backdrop-blur-xl transition hover:z-10 hover:shadow-[0_10px_22px_rgba(54,69,79,0.1)]",
+                                  "absolute left-1 right-1 flex flex-col overflow-hidden rounded-lg border px-2 py-1 text-left shadow-[0_6px_16px_rgba(54,69,79,0.06)] backdrop-blur-xl transition hover:z-10 hover:shadow-[0_10px_22px_rgba(54,69,79,0.1)] focus:outline-none",
                                   weekAppointmentTone(appointment),
-                                  weekSourceAccent(appointment.source)
+                                  weekSourceAccent(appointment.source),
+                                  selectedAppointmentId === appointment.id &&
+                                    "z-10 ring-2 ring-cyan-300/60 ring-offset-1 ring-offset-white/40 shadow-[0_12px_26px_rgba(54,69,79,0.14)]"
                                 )}
                                 style={weekEventStyle(appointment)}
                                 title={`${formatTimeRange(
@@ -1440,7 +1487,7 @@ export default function TodayDashboard() {
                                 <p className="mt-0.5 truncate text-[12px] font-bold leading-tight tracking-[-0.02em]">
                                   {patientName(appointment.patient)}
                                 </p>
-                              </div>
+                              </button>
                             ))}
                           </div>
                         ))}
@@ -1457,6 +1504,243 @@ export default function TodayDashboard() {
           </div>
         </section>
       </main>
+
+      {agendaMode === "week" &&
+        selectedAppointment &&
+        (() => {
+          const appointment = selectedAppointment;
+          const linkedSession = appointment.linkedSession;
+          const canCompleteSession = Boolean(
+            linkedSession && linkedSession.status !== "COMPLETED"
+          );
+          const patientPrescriptions = activePrescriptionsForPatient(
+            appointment.patient.id
+          );
+          const selectedPrescriptionId =
+            selectedPrescriptionByAppointment[appointment.id] ||
+            patientPrescriptions[0]?.id ||
+            "";
+          const visibleNotes = cleanCalendarNotes(appointment.notes);
+
+          return (
+            <>
+              <div
+                role="presentation"
+                onClick={() => setSelectedAppointmentId(null)}
+                className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px] transition lg:bg-black/10"
+              />
+              <aside
+                role="dialog"
+                aria-label="Détail du rendez-vous"
+                className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-white/70 bg-white/82 shadow-[0_30px_80px_rgba(54,69,79,0.18)] backdrop-blur-2xl"
+              >
+                <div className="flex items-start justify-between gap-4 border-b border-black/5 px-5 py-4">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                      Détail rendez-vous
+                    </p>
+                    <h2 className="mt-2 text-xl font-semibold tracking-[-0.04em]">
+                      {patientName(appointment.patient)}
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAppointmentId(null)}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/65 text-black/45 shadow-[0_8px_20px_rgba(54,69,79,0.06)] transition hover:bg-white/90 hover:text-black"
+                    aria-label="Fermer le panneau"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+                  <div className="flex flex-wrap gap-2">
+                    <span
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                        sourceTone(appointment.source)
+                      )}
+                    >
+                      {appointment.source}
+                    </span>
+                    <span className="rounded-full border border-white/70 bg-white/65 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/48">
+                      {appointment.status}
+                    </span>
+                    <span
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]",
+                        sessionStateTone(appointment)
+                      )}
+                    >
+                      {sessionStateLabel(appointment)}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-2 rounded-2xl border border-white/70 bg-white/55 px-4 py-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-black/70">
+                      <Icon
+                        name="calendar"
+                        className="h-4 w-4 text-cyan-700/55"
+                      />
+                      <span className="capitalize">
+                        {formatAppointmentDate(appointment.startsAt)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-black/70">
+                      <Icon name="clock" className="h-4 w-4 text-cyan-700/55" />
+                      <span>
+                        {formatTimeRange(
+                          appointment.startsAt,
+                          appointment.endsAt
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  {linkedSession?.prescription && (
+                    <div className="rounded-2xl border border-cyan-100/70 bg-cyan-50/45 px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                        Prescription
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-cyan-950/75">
+                        {linkedSession.prescription.title}
+                      </p>
+                      <p className="mt-1 text-xs font-medium text-black/45">
+                        Séance n°{linkedSession.sessionNumber} ·{" "}
+                        {linkedSession.prescription.completedSessions} /{" "}
+                        {linkedSession.prescription.prescribedSessions} réalisées
+                      </p>
+                    </div>
+                  )}
+
+                  {visibleNotes && (
+                    <div className="rounded-2xl border border-white/70 bg-white/55 px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-black/35">
+                        Notes
+                      </p>
+                      <p className="mt-1 whitespace-pre-line text-xs font-medium leading-5 text-black/55">
+                        {visibleNotes}
+                      </p>
+                    </div>
+                  )}
+
+                  {(error || success) && (
+                    <div className="space-y-2">
+                      {error && (
+                        <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                          {error}
+                        </p>
+                      )}
+                      {success && (
+                        <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                          {success}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {!appointment.hasSession && (
+                    <div className="grid gap-2">
+                      {patientPrescriptions.length > 1 && (
+                        <select
+                          value={selectedPrescriptionId}
+                          onChange={(event) =>
+                            setSelectedPrescriptionByAppointment((current) => ({
+                              ...current,
+                              [appointment.id]: event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-full border border-white/80 bg-white/65 px-3 py-2 text-xs font-semibold text-black/65 outline-none shadow-[0_10px_24px_rgba(54,69,79,0.035)] backdrop-blur-xl transition focus:border-cyan-200 focus:bg-white/90 focus:ring-4 focus:ring-cyan-100/45"
+                        >
+                          {patientPrescriptions.map((prescription) => {
+                            const remaining =
+                              prescription.prescribedSessions -
+                              prescription.completedSessions;
+
+                            return (
+                              <option
+                                key={prescription.id}
+                                value={prescription.id}
+                              >
+                                {prescription.title} · {remaining} restante
+                                {remaining > 1 ? "s" : ""}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      )}
+                      {!patientPrescriptions.length && (
+                        <span className="rounded-full border border-[#eadfca]/70 bg-[#fff8ea]/75 px-3 py-2 text-xs font-semibold text-[#7b6745]">
+                          Aucune prescription active
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-black/5 px-5 py-4">
+                  <div className="flex flex-wrap gap-2">
+                    {!appointment.hasSession && (
+                      <button
+                        type="button"
+                        onClick={() => handleCreateSession(appointment)}
+                        disabled={
+                          creatingSessionAppointmentId === appointment.id ||
+                          !patientPrescriptions.length
+                        }
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-cyan-100/80 bg-cyan-50/70 px-3 py-2 text-xs font-semibold text-cyan-800/75 shadow-[0_10px_24px_rgba(8,145,178,0.045)] transition hover:-translate-y-px hover:bg-cyan-100/60 disabled:cursor-not-allowed disabled:opacity-55"
+                      >
+                        <Icon name="calendar" className="h-3.5 w-3.5" />
+                        {creatingSessionAppointmentId === appointment.id
+                          ? "Création..."
+                          : "Créer séance"}
+                      </button>
+                    )}
+                    {canCompleteSession && linkedSession && (
+                      <button
+                        type="button"
+                        onClick={() => handleCompleteSession(appointment)}
+                        disabled={completingSessionId === linkedSession.id}
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68] shadow-[0_10px_24px_rgba(79,117,91,0.055)] transition hover:-translate-y-px hover:bg-[#e6f3e2] disabled:cursor-not-allowed disabled:opacity-55"
+                      >
+                        <Icon name="check" className="h-3.5 w-3.5" />
+                        {completingSessionId === linkedSession.id
+                          ? "Validation..."
+                          : "Marquer réalisée"}
+                      </button>
+                    )}
+                    {linkedSession?.status === "COMPLETED" && (
+                      <span className="inline-flex items-center gap-2 rounded-full border border-[#dbead7]/80 bg-[#f0f8ee]/75 px-3 py-2 text-xs font-semibold text-[#5f7f68]">
+                        <Icon name="check" className="h-3.5 w-3.5" />
+                        Réalisée
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        router.push(
+                          `/dashboard/patients/${appointment.patient.id}`
+                        )
+                      }
+                      className={cn(BUTTON_LIGHT, "px-3 py-2")}
+                    >
+                      Voir patient
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push("/dashboard/appointments")}
+                      className={cn(BUTTON_LIGHT, "px-3 py-2")}
+                    >
+                      Voir rendez-vous
+                    </button>
+                  </div>
+                </div>
+              </aside>
+            </>
+          );
+        })()}
     </div>
   );
 }
