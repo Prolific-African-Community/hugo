@@ -131,7 +131,17 @@ const BUTTON_LIGHT =
   "inline-flex items-center justify-center gap-2 rounded-full border border-white/70 bg-white/55 px-4 py-2.5 text-xs font-semibold text-black/72 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black disabled:cursor-not-allowed disabled:opacity-50";
 const AGENDA_START_HOUR = 8;
 const AGENDA_END_HOUR = 22;
-const WEEK_GRID_HEIGHT = 784;
+// La journee principale (prioritaire et toujours lisible) va jusqu'a 19:00.
+// 19:00 -> 22:00 reste accessible via le scroll interne de la grille.
+const AGENDA_PRIORITY_END_HOUR = 19;
+const WEEK_SLOT_MINUTES = 30;
+const WEEK_SLOT_PX = 32;
+const WEEK_TOTAL_SLOTS =
+  ((AGENDA_END_HOUR - AGENDA_START_HOUR) * 60) / WEEK_SLOT_MINUTES;
+const WEEK_GRID_HEIGHT = WEEK_TOTAL_SLOTS * WEEK_SLOT_PX;
+const WEEK_VISIBLE_HEIGHT =
+  (((AGENDA_PRIORITY_END_HOUR - AGENDA_START_HOUR) * 60) / WEEK_SLOT_MINUTES) *
+  WEEK_SLOT_PX;
 
 function Icon({
   name,
@@ -396,21 +406,24 @@ function minutesSinceMidnight(value?: string | null) {
 function weekEventStyle(appointment: TodayAppointment) {
   const dayStartMinutes = AGENDA_START_HOUR * 60;
   const dayEndMinutes = AGENDA_END_HOUR * 60;
-  const visibleMinutes = dayEndMinutes - dayStartMinutes;
   const startsAt = Math.max(
     dayStartMinutes,
     Math.min(dayEndMinutes, minutesSinceMidnight(appointment.startsAt))
   );
   const endsAt = Math.max(
-    startsAt + 20,
+    startsAt + WEEK_SLOT_MINUTES,
     Math.min(dayEndMinutes, minutesSinceMidnight(appointment.endsAt))
   );
-  const top = ((startsAt - dayStartMinutes) / visibleMinutes) * 100;
-  const height = Math.max(((endsAt - startsAt) / visibleMinutes) * 100, 5.5);
+  // Hauteur proportionnelle a la duree : 1 creneau = 30 min = WEEK_SLOT_PX.
+  const top = ((startsAt - dayStartMinutes) / WEEK_SLOT_MINUTES) * WEEK_SLOT_PX;
+  const rawHeight =
+    ((endsAt - startsAt) / WEEK_SLOT_MINUTES) * WEEK_SLOT_PX;
+  const height = Math.max(rawHeight, WEEK_SLOT_PX);
 
   return {
-    top: `${top}%`,
-    height: `${height}%`,
+    top: `${top}px`,
+    // -3px pour laisser un fin interstice entre deux rendez-vous consecutifs.
+    height: `${Math.max(height - 3, WEEK_SLOT_PX - 3)}px`,
   };
 }
 
@@ -439,6 +452,13 @@ function sessionStateLabel(appointment: TodayAppointment) {
   return "Séance prévue";
 }
 
+// Libelle ultra-court pour les cards compactes de la vue semaine.
+function weekSessionShortLabel(appointment: TodayAppointment) {
+  if (!appointment.linkedSession) return "À créer";
+  if (appointment.linkedSession.status === "COMPLETED") return "Réalisée";
+  return "Prévue";
+}
+
 function sessionStateTone(appointment: TodayAppointment) {
   if (!appointment.linkedSession) {
     return "border-[#eadfca]/70 bg-[#fff8ea]/75 text-[#7b6745]";
@@ -463,24 +483,36 @@ function sourceTone(source: AppointmentSource) {
   return "border-white/70 bg-white/65 text-black/48";
 }
 
+// Fond de la card pilote par le STATUT de la seance (calme, Apple-like).
+//  - realisee : vert sage
+//  - non creee : champagne / ambre doux
+//  - prevue : bleu tres doux
 function weekAppointmentTone(appointment: TodayAppointment) {
   if (appointment.linkedSession?.status === "COMPLETED") {
-    return "border-[#dbead7]/90 bg-[#eef8ed]/90 text-[#446b50]";
+    return "border-[#d3e3cf]/80 bg-[#eef6ec]/85 text-[#4f7359]";
   }
 
   if (!appointment.hasSession) {
-    return "border-[#eadfca]/90 bg-[#fff7e6]/90 text-[#7b6745]";
+    return "border-[#ecdfc4]/85 bg-[#fdf6e7]/88 text-[#806a44]";
   }
 
-  if (appointment.source === "APPLE_CALENDAR") {
-    return "border-cyan-100/90 bg-cyan-50/90 text-cyan-900/75";
+  return "border-[#d2e2ec]/85 bg-[#eef5fa]/88 text-[#3f6981]";
+}
+
+// La SOURCE est rendue par un accent de bordure gauche discret.
+//  - Apple Calendar : accent bleu froid
+//  - Doctena : accent vert doux
+//  - Manual : neutre / gris doux
+function weekSourceAccent(source: AppointmentSource) {
+  if (source === "APPLE_CALENDAR") {
+    return "border-l-[3px] border-l-cyan-300/75";
   }
 
-  if (appointment.source === "DOCTENA") {
-    return "border-[#dbead7]/90 bg-[#f1f8ef]/90 text-[#5f7f68]";
+  if (source === "DOCTENA") {
+    return "border-l-[3px] border-l-emerald-300/65";
   }
 
-  return "border-white/80 bg-white/85 text-black/72";
+  return "border-l-[3px] border-l-black/15";
 }
 
 function actionCopy(action: BillingAction) {
@@ -765,9 +797,20 @@ export default function TodayDashboard() {
   ).length;
   const agendaPeriodLabel = formatAgendaPeriod(data, selectedAgendaDate);
   const hasWeekAppointments = visibleAppointmentCount > 0;
-  const agendaHours = Array.from(
-    { length: AGENDA_END_HOUR - AGENDA_START_HOUR + 1 },
-    (_, index) => AGENDA_START_HOUR + index
+  // Lignes de la grille semaine, une tous les 30 min (08:00 -> 22:00 inclus).
+  const agendaSlotLines = Array.from(
+    { length: WEEK_TOTAL_SLOTS + 1 },
+    (_, index) => {
+      const minutes = AGENDA_START_HOUR * 60 + index * WEEK_SLOT_MINUTES;
+      const hour = Math.floor(minutes / 60);
+      const minute = minutes % 60;
+      return {
+        index,
+        isHour: minute === 0,
+        top: index * WEEK_SLOT_PX,
+        label: `${`${hour}`.padStart(2, "0")}:${`${minute}`.padStart(2, "0")}`,
+      };
+    }
   );
 
   const renderDetailedAppointment = (appointment: TodayAppointment) => {
@@ -1286,129 +1329,127 @@ export default function TodayDashboard() {
                 )}
                 <div className="overflow-x-auto pb-2">
                   <div className="min-w-[980px]">
-                    <div className="grid grid-cols-[64px_repeat(6,minmax(140px,1fr))] gap-2">
+                    {/* En-tetes des jours (lundi -> samedi), hauteur reduite */}
+                    <div className="grid grid-cols-[56px_repeat(6,minmax(150px,1fr))] gap-2">
                       <div />
                       {visibleAgendaDays.map((day) => (
                         <div
                           key={day.date}
-                          className="rounded-2xl border border-white/70 bg-white/52 px-3 py-2 text-center backdrop-blur-xl"
+                          className={cn(
+                            "flex items-center justify-between gap-2 rounded-xl border px-3 py-1.5 backdrop-blur-xl",
+                            day.isToday
+                              ? "border-cyan-200/70 bg-cyan-50/70 ring-1 ring-inset ring-cyan-200/50"
+                              : "border-white/70 bg-white/52"
+                          )}
                         >
-                          <p className="text-xs font-bold capitalize tracking-[-0.02em] text-black/70">
+                          <p
+                            className={cn(
+                              "truncate text-xs font-bold capitalize tracking-[-0.02em]",
+                              day.isToday ? "text-cyan-800/85" : "text-black/70"
+                            )}
+                          >
                             {day.dayLabel}
                           </p>
-                          <p className="mt-1 text-[11px] font-semibold text-black/38">
+                          <p className="shrink-0 text-[10px] font-semibold text-black/38">
                             {day.dateLabel}
                           </p>
                         </div>
                       ))}
                     </div>
 
+                    {/* Grille horaire : 08:00 -> 19:00 prioritaire, 19:00 -> 22:00 via scroll interne */}
                     <div
-                      className="mt-2 grid grid-cols-[64px_repeat(6,minmax(140px,1fr))] gap-2"
-                      style={{ height: WEEK_GRID_HEIGHT }}
+                      className="mt-2 overflow-y-auto overscroll-contain rounded-[1.15rem]"
+                      style={{ maxHeight: WEEK_VISIBLE_HEIGHT }}
                     >
-                      <div className="relative">
-                        {agendaHours.map((hour, index) => (
-                          <div
-                            key={hour}
-                            className="absolute left-0 right-2 text-right text-[11px] font-semibold text-black/32"
-                            style={{
-                              top: `${(index / (agendaHours.length - 1)) * 100}%`,
-                              transform: "translateY(-50%)",
-                            }}
-                          >
-                            {`${hour}`.padStart(2, "0")}:00
-                          </div>
-                        ))}
-                      </div>
-
-                      {visibleAgendaDays.map((day) => (
-                        <div
-                          key={day.date}
-                          className="relative overflow-hidden rounded-[1.15rem] border border-white/70 bg-white/34 backdrop-blur-xl"
-                        >
-                          {agendaHours.slice(0, -1).map((hour) => (
+                      <div
+                        className="grid grid-cols-[56px_repeat(6,minmax(150px,1fr))] gap-2"
+                        style={{ height: WEEK_GRID_HEIGHT }}
+                      >
+                        {/* Colonne des reperes horaires (heures + demi-heures discretes) */}
+                        <div className="relative">
+                          {agendaSlotLines.map((line) => (
                             <div
-                              key={hour}
-                              className="h-14 border-b border-white/55 bg-white/12 transition hover:bg-cyan-50/22"
-                            />
+                              key={line.index}
+                              className={cn(
+                                "absolute right-2 text-right tabular-nums",
+                                line.isHour
+                                  ? "text-[11px] font-semibold text-black/40"
+                                  : "text-[9px] font-medium text-black/20"
+                              )}
+                              style={{
+                                top: `${line.top}px`,
+                                transform: "translateY(-50%)",
+                              }}
+                            >
+                              {line.label}
+                            </div>
                           ))}
+                        </div>
 
-                          {day.appointments.map((appointment) => {
-                            const canCompleteSession = Boolean(
-                              appointment.linkedSession &&
-                                appointment.linkedSession.status !== "COMPLETED"
-                            );
-                            const patientPrescriptions =
-                              activePrescriptionsForPatient(appointment.patient.id);
+                        {visibleAgendaDays.map((day) => (
+                          <div
+                            key={day.date}
+                            className={cn(
+                              "relative overflow-hidden rounded-[1.15rem] border backdrop-blur-xl",
+                              day.isToday
+                                ? "border-cyan-100/70 bg-cyan-50/16"
+                                : "border-white/70 bg-white/30"
+                            )}
+                          >
+                            {/* Creneaux de 30 min : ligne d'heure plus marquee, demi-heure discrete */}
+                            {Array.from({ length: WEEK_TOTAL_SLOTS }).map(
+                              (_, slotIndex) => (
+                                <div
+                                  key={slotIndex}
+                                  className={cn(
+                                    "border-b transition hover:bg-cyan-50/25",
+                                    slotIndex % 2 === 1
+                                      ? "border-black/[0.08]"
+                                      : "border-black/[0.03]"
+                                  )}
+                                  style={{ height: WEEK_SLOT_PX }}
+                                />
+                              )
+                            )}
 
-                            return (
+                            {day.appointments.map((appointment) => (
                               <div
                                 key={appointment.id}
                                 className={cn(
-                                  "absolute left-1.5 right-1.5 overflow-hidden rounded-2xl border px-2.5 py-2 text-left shadow-[0_10px_24px_rgba(54,69,79,0.05)] backdrop-blur-xl transition hover:z-10 hover:scale-[1.015]",
-                                  weekAppointmentTone(appointment)
+                                  "absolute left-1 right-1 flex flex-col overflow-hidden rounded-lg border px-2 py-1 text-left shadow-[0_6px_16px_rgba(54,69,79,0.06)] backdrop-blur-xl transition hover:z-10 hover:shadow-[0_10px_22px_rgba(54,69,79,0.1)]",
+                                  weekAppointmentTone(appointment),
+                                  weekSourceAccent(appointment.source)
                                 )}
                                 style={weekEventStyle(appointment)}
+                                title={`${formatTimeRange(
+                                  appointment.startsAt,
+                                  appointment.endsAt
+                                )} · ${patientName(
+                                  appointment.patient
+                                )} · ${weekSessionShortLabel(appointment)}`}
                               >
-                                <p className="text-[11px] font-bold leading-none">
-                                  {formatTime(appointment.startsAt)}
-                                </p>
-                                <p className="mt-1 truncate text-xs font-bold tracking-[-0.02em]">
+                                <div className="flex items-center justify-between gap-1 leading-none">
+                                  <span className="text-[10.5px] font-bold tabular-nums">
+                                    {formatTime(appointment.startsAt)}
+                                  </span>
+                                  <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.06em] opacity-70">
+                                    {weekSessionShortLabel(appointment)}
+                                  </span>
+                                </div>
+                                <p className="mt-0.5 truncate text-[12px] font-bold leading-tight tracking-[-0.02em]">
                                   {patientName(appointment.patient)}
                                 </p>
-                                <p className="mt-1 truncate text-[10px] font-semibold opacity-65">
-                                  {appointment.hasSession
-                                    ? sessionStateLabel(appointment)
-                                    : "Séance non créée"}
-                                </p>
-                                <div className="mt-2 flex flex-wrap gap-1">
-                                  {!appointment.hasSession && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleCreateSession(appointment)}
-                                      disabled={
-                                        creatingSessionAppointmentId ===
-                                          appointment.id ||
-                                        !patientPrescriptions.length
-                                      }
-                                      className="rounded-full bg-white/55 px-2 py-1 text-[10px] font-bold text-black/55 transition hover:bg-white/80 disabled:opacity-45"
-                                    >
-                                      Créer
-                                    </button>
-                                  )}
-                                  {canCompleteSession &&
-                                    appointment.linkedSession && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleCompleteSession(appointment)
-                                        }
-                                        disabled={
-                                          completingSessionId ===
-                                          appointment.linkedSession.id
-                                        }
-                                        className="rounded-full bg-white/55 px-2 py-1 text-[10px] font-bold text-black/55 transition hover:bg-white/80 disabled:opacity-45"
-                                      >
-                                        Réalisée
-                                      </button>
-                                    )}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      router.push("/dashboard/appointments")
-                                    }
-                                    className="rounded-full bg-white/55 px-2 py-1 text-[10px] font-bold text-black/55 transition hover:bg-white/80"
-                                  >
-                                    Voir
-                                  </button>
-                                </div>
                               </div>
-                            );
-                          })}
-                        </div>
-                      ))}
+                            ))}
+                          </div>
+                        ))}
+                      </div>
                     </div>
+
+                    <p className="mt-2 px-1 text-[10px] font-medium text-black/30">
+                      08:00 — 19:00 prioritaire · faites défiler pour 19:00 — 22:00
+                    </p>
                   </div>
                 </div>
               </div>
