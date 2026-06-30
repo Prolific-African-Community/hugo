@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { DragEvent } from "react";
 import { useRouter } from "next/router";
 import { cleanCalendarNotes } from "../../lib/hugo-display";
 
@@ -140,11 +141,12 @@ const BUTTON_LIGHT =
   "inline-flex items-center justify-center gap-2 rounded-full border border-white/70 bg-white/55 px-4 py-2.5 text-xs font-semibold text-black/72 shadow-[0_10px_24px_rgba(54,69,79,0.045)] backdrop-blur-xl transition hover:border-cyan-100 hover:bg-cyan-50/70 hover:text-black disabled:cursor-not-allowed disabled:opacity-50";
 const AGENDA_START_HOUR = 8;
 const AGENDA_END_HOUR = 22;
-// La journee principale (prioritaire et toujours lisible) va jusqu'a 19:00.
-// 19:00 -> 22:00 reste accessible via le scroll interne de la grille.
-const AGENDA_PRIORITY_END_HOUR = 19;
+// La journee principale (prioritaire et toujours lisible) va jusqu'a 18:00.
+// 18:00 -> 22:00 reste accessible via le scroll interne de la grille.
+const AGENDA_PRIORITY_END_HOUR = 18;
 const WEEK_SLOT_MINUTES = 30;
-const WEEK_SLOT_PX = 32;
+// Creneaux un peu plus hauts pour une lecture nette des cards de 30 min.
+const WEEK_SLOT_PX = 38;
 const WEEK_TOTAL_SLOTS =
   ((AGENDA_END_HOUR - AGENDA_START_HOUR) * 60) / WEEK_SLOT_MINUTES;
 const WEEK_GRID_HEIGHT = WEEK_TOTAL_SLOTS * WEEK_SLOT_PX;
@@ -280,9 +282,9 @@ function StatPill({
   tone: string;
 }) {
   return (
-    <div className={cn("rounded-2xl border px-4 py-3 backdrop-blur-xl", tone)}>
-      <p className="text-2xl font-bold tracking-[-0.05em]">{value}</p>
-      <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] opacity-70">
+    <div className={cn("rounded-2xl border px-3.5 py-2.5 backdrop-blur-xl", tone)}>
+      <p className="text-xl font-bold tracking-[-0.04em]">{value}</p>
+      <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] opacity-70">
         {label}
       </p>
     </div>
@@ -590,6 +592,15 @@ export default function TodayDashboard() {
   const [applyingSlotStart, setApplyingSlotStart] = useState<string | null>(
     null
   );
+  // Drag & drop (vue semaine, desktop) — raccourci visuel du meme reschedule.
+  const [draggedAppointment, setDraggedAppointment] =
+    useState<TodayAppointment | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<{
+    dayDate: string;
+    slotIndex: number;
+    valid: boolean;
+  } | null>(null);
+  const [dragReschedulePending, setDragReschedulePending] = useState(false);
   const [selectedPrescriptionByAppointment, setSelectedPrescriptionByAppointment] =
     useState<Record<string, string>>({});
   const [completingSessionId, setCompletingSessionId] = useState<string | null>(
@@ -856,6 +867,149 @@ export default function TodayDashboard() {
     } finally {
       setApplyingSlotStart(null);
     }
+  };
+
+  // --- Drag & drop (vue semaine) : meme endpoint reschedule, snap 30 min. ---
+
+  // Duree conservee du rendez-vous (fallback 45 min si invalide).
+  const getDraggedDurationMinutes = (appointment: TodayAppointment) => {
+    const start = new Date(appointment.startsAt).getTime();
+    const end = new Date(appointment.endsAt).getTime();
+    const duration = Math.round((end - start) / 60000);
+    return Number.isFinite(duration) && duration >= WEEK_SLOT_MINUTES
+      ? duration
+      : 45;
+  };
+
+  // Index de creneau (0..27) a partir de la position verticale du curseur.
+  const computeDropSlotIndex = (clientY: number, columnTop: number) => {
+    const index = Math.floor((clientY - columnTop) / WEEK_SLOT_PX);
+    return Math.max(0, Math.min(WEEK_TOTAL_SLOTS - 1, index));
+  };
+
+  const isSlotWithinBounds = (slotIndex: number, durationMinutes: number) => {
+    const startMinutes =
+      AGENDA_START_HOUR * 60 + slotIndex * WEEK_SLOT_MINUTES;
+    return startMinutes + durationMinutes <= AGENDA_END_HOUR * 60;
+  };
+
+  const handleAppointmentDragStart = (
+    appointment: TodayAppointment,
+    event: DragEvent<HTMLButtonElement>
+  ) => {
+    setDraggedAppointment(appointment);
+    setError(null);
+    setSuccess(null);
+    event.dataTransfer.effectAllowed = "move";
+    try {
+      event.dataTransfer.setData("text/plain", appointment.id);
+    } catch {
+      // certains navigateurs restreignent setData : sans impact sur le drop.
+    }
+  };
+
+  const handleAppointmentDragEnd = () => {
+    setDraggedAppointment(null);
+    setDragOverSlot(null);
+  };
+
+  const handleDayDragOver = (
+    day: AgendaDay,
+    event: DragEvent<HTMLDivElement>
+  ) => {
+    if (!draggedAppointment) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const slotIndex = computeDropSlotIndex(event.clientY, rect.top);
+    const valid = isSlotWithinBounds(
+      slotIndex,
+      getDraggedDurationMinutes(draggedAppointment)
+    );
+
+    setDragOverSlot((current) =>
+      current &&
+      current.dayDate === day.date &&
+      current.slotIndex === slotIndex &&
+      current.valid === valid
+        ? current
+        : { dayDate: day.date, slotIndex, valid }
+    );
+  };
+
+  const performDragReschedule = async (
+    appointment: TodayAppointment,
+    dayDate: string,
+    slotIndex: number
+  ) => {
+    const durationMinutes = getDraggedDurationMinutes(appointment);
+    const startMinutes =
+      AGENDA_START_HOUR * 60 + slotIndex * WEEK_SLOT_MINUTES;
+
+    if (startMinutes + durationMinutes > AGENDA_END_HOUR * 60) {
+      setError("Déplacement impossible : le rendez-vous dépasserait 22:00.");
+      return;
+    }
+
+    const [year, month, dayOfMonth] = dayDate.split("-").map(Number);
+    const newStart = new Date(
+      year,
+      month - 1,
+      dayOfMonth,
+      Math.floor(startMinutes / 60),
+      startMinutes % 60,
+      0,
+      0
+    );
+    const newEnd = new Date(newStart.getTime() + durationMinutes * 60000);
+
+    // Drop sur le meme creneau : aucun appel API.
+    if (new Date(appointment.startsAt).getTime() === newStart.getTime()) {
+      return;
+    }
+
+    setDragReschedulePending(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await request(`/api/hugo/appointments/${appointment.id}/reschedule`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          startsAt: newStart.toISOString(),
+          endsAt: newEnd.toISOString(),
+        }),
+      });
+      await loadToday();
+      setSuccess("Rendez-vous déplacé.");
+    } catch (dragError) {
+      const message = dragError instanceof Error ? dragError.message : "";
+      // Pas d'update optimiste : en cas d'erreur la card reste a sa place.
+      setError(
+        message.includes("plage horaire")
+          ? "Un rendez-vous existe déjà sur cette plage horaire."
+          : "Déplacement impossible."
+      );
+    } finally {
+      setDragReschedulePending(false);
+    }
+  };
+
+  const handleDayDrop = async (
+    day: AgendaDay,
+    event: DragEvent<HTMLDivElement>
+  ) => {
+    if (!draggedAppointment) return;
+    event.preventDefault();
+
+    const appointment = draggedAppointment;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const slotIndex = computeDropSlotIndex(event.clientY, rect.top);
+
+    setDraggedAppointment(null);
+    setDragOverSlot(null);
+    await performDragReschedule(appointment, day.date, slotIndex);
   };
 
   useEffect(() => {
@@ -1167,33 +1321,71 @@ export default function TodayDashboard() {
       </header>
 
       <main className="mx-auto max-w-7xl px-6 pb-16 pt-8">
-        <section className={cn(CARD, "relative overflow-hidden p-6 sm:p-8")}>
-          <div className="pointer-events-none absolute right-0 top-0 h-52 w-52 rounded-full bg-cyan-100/45 blur-3xl" />
-          <div className="pointer-events-none absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-[#fff0df]/70 blur-3xl" />
+        <section className={cn(CARD, "relative overflow-hidden p-5 sm:p-6")}>
+          <div className="pointer-events-none absolute right-0 top-0 h-44 w-44 rounded-full bg-cyan-100/40 blur-3xl" />
+          <div className="pointer-events-none absolute bottom-0 left-1/3 h-32 w-32 rounded-full bg-[#fff0df]/60 blur-3xl" />
 
-          <div className="relative flex flex-col gap-7 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
-                {data?.cabinet.name || "Cabinet Hugo"}
-              </p>
-              <h1 className="mt-3 text-4xl font-bold tracking-[-0.055em] sm:text-5xl">
-                Cockpit
-              </h1>
-              <p className="mt-3 text-base font-medium text-black/48">
-                Agenda, séances et actions du cabinet
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-black/38">
-                <span className="capitalize">{formatTodayDate()}</span>
-                <span>· Période affichée {formatSelectedDate(selectedAgendaDate)}</span>
-                {data?.cabinet.lastAppleCalendarSync && (
-                  <span>
-                    · Sync Apple {formatDateTime(data.cabinet.lastAppleCalendarSync)}
-                  </span>
-                )}
+          <div className="relative flex flex-col gap-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
+                  {data?.cabinet.name || "Cabinet Hugo"}
+                </p>
+                <h1 className="mt-2 text-3xl font-bold tracking-[-0.05em] sm:text-4xl">
+                  Cockpit
+                </h1>
+                <p className="mt-1.5 text-sm font-medium text-black/48">
+                  Agenda, séances et actions du cabinet
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-semibold text-black/38">
+                  <span className="capitalize">{formatTodayDate()}</span>
+                  <span aria-hidden>·</span>
+                  <span>Période {formatSelectedDate(selectedAgendaDate)}</span>
+                  {data?.cabinet.lastAppleCalendarSync && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="inline-flex items-center gap-1 text-black/32">
+                        <Icon
+                          name="calendar"
+                          className="h-3 w-3 text-cyan-700/45"
+                        />
+                        Sync Apple{" "}
+                        {formatDateTime(data.cabinet.lastAppleCalendarSync)}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => loadToday(true)}
+                  disabled={refreshing}
+                  className={cn(BUTTON_DARK, "px-3.5 py-2")}
+                >
+                  {refreshing ? "Actualisation..." : "Actualiser"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
+                  className={cn(BUTTON_LIGHT, "px-3.5 py-2")}
+                >
+                  <Icon name="calendar" className="h-3.5 w-3.5" />
+                  Ajouter séance
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
+                  className={cn(BUTTON_LIGHT, "px-3.5 py-2")}
+                >
+                  <Icon name="receipt" className="h-3.5 w-3.5" />
+                  Factures
+                </button>
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[560px]">
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
               <StatPill
                 label="Rendez-vous du jour"
                 value={loading ? "..." : data?.summary.appointmentsToday ?? 0}
@@ -1220,33 +1412,77 @@ export default function TodayDashboard() {
                 tone="border-[#f3ddd7]/80 bg-[#fff1ed]/80 text-[#9a6657]"
               />
             </div>
-          </div>
 
-          <div className="relative mt-7 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => loadToday(true)}
-              disabled={refreshing}
-              className={BUTTON_DARK}
-            >
-              {refreshing ? "Actualisation..." : "Actualiser"}
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push(`/dashboard/sessions${entityQuery}`)}
-              className={BUTTON_LIGHT}
-            >
-              <Icon name="calendar" className="h-3.5 w-3.5" />
-              Ajouter séance
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
-              className={BUTTON_LIGHT}
-            >
-              <Icon name="receipt" className="h-3.5 w-3.5" />
-              Factures
-            </button>
+            {/* Priorités compactes (ancienne section "Actions importantes" fusionnée) */}
+            <div className="rounded-2xl border border-white/65 bg-white/45 p-3 backdrop-blur-xl">
+              <div className="flex items-center justify-between gap-3">
+                <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9a6657]/75">
+                  <Icon name="spark" className="h-3.5 w-3.5" />
+                  Priorités
+                </p>
+                {!loading && importantActions.length > 0 && (
+                  <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-semibold text-black/45">
+                    {importantActions.length}
+                  </span>
+                )}
+              </div>
+
+              {loading ? (
+                <div className="mt-2.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {Array.from({ length: 3 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="h-12 animate-pulse rounded-xl bg-black/5"
+                    />
+                  ))}
+                </div>
+              ) : !importantActions.length ? (
+                <p className="mt-2 text-xs font-medium text-black/40">
+                  Rien d'urgent pour le moment.
+                </p>
+              ) : (
+                <div className="mt-2.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {importantActions.slice(0, 6).map((action) => {
+                    const copy = actionCopy(action);
+                    const isDraft = action.type === "DRAFT";
+                    const busy = creatingDraftId === action.prescription.id;
+
+                    return (
+                      <button
+                        key={`${action.type}-${action.prescription.id}`}
+                        type="button"
+                        onClick={() =>
+                          isDraft
+                            ? handleCreateDraft(action)
+                            : router.push(`/dashboard/invoices${entityQuery}`)
+                        }
+                        disabled={busy}
+                        className={cn(
+                          "flex items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60",
+                          copy.tone
+                        )}
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/65">
+                          <Icon name={copy.icon} className="h-3.5 w-3.5" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-semibold tracking-[-0.01em]">
+                            {patientName(action.patient)}
+                          </span>
+                          <span className="block truncate text-[10px] font-medium opacity-70">
+                            {copy.label} · {action.remainingSessions} restante
+                            {action.remainingSessions > 1 ? "s" : ""}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] opacity-70">
+                          {busy ? "..." : isDraft ? "Créer" : "Voir"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
@@ -1265,90 +1501,6 @@ export default function TodayDashboard() {
           </section>
         )}
 
-        <section className={cn(CARD, "mt-4 overflow-hidden")}>
-          <div className="flex items-end justify-between gap-4 border-b border-black/5 px-5 py-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700/60">
-                Priorités
-              </p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
-                Actions importantes
-              </h2>
-            </div>
-            <Icon name="spark" className="h-5 w-5 text-[#9a6657]/50" />
-          </div>
-
-          {loading ? (
-            <div className="grid gap-3 p-5 md:grid-cols-3">
-              {Array.from({ length: 3 }).map((_, index) => (
-                <div
-                  key={index}
-                  className="h-24 animate-pulse rounded-3xl bg-black/5"
-                />
-              ))}
-            </div>
-          ) : !importantActions.length ? (
-            <p className="px-5 py-8 text-sm font-medium text-black/45">
-              Rien d'urgent pour le moment.
-            </p>
-          ) : (
-            <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
-              {importantActions.map((action) => {
-                const copy = actionCopy(action);
-
-                return (
-                  <div
-                    key={`${action.type}-${action.prescription.id}`}
-                    className={cn("rounded-3xl border p-4", copy.tone)}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="flex items-center gap-2 text-sm font-bold tracking-[-0.02em]">
-                          <Icon name={copy.icon} className="h-4 w-4" />
-                          {copy.label}
-                        </p>
-                        <p className="mt-3 font-semibold text-black/78">
-                          {patientName(action.patient)}
-                        </p>
-                        <p className="mt-1 line-clamp-1 text-xs font-medium text-black/45">
-                          {action.prescription.title}
-                        </p>
-                      </div>
-                      <span className="shrink-0 rounded-full bg-white/55 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-black/45">
-                        {action.remainingSessions} restante
-                        {action.remainingSessions > 1 ? "s" : ""}
-                      </span>
-                    </div>
-                    <p className="mt-3 text-xs font-medium text-black/45">
-                      {action.completedSessions} / {action.prescribedSessions}{" "}
-                      séances réalisées
-                    </p>
-                    {action.type === "DRAFT" ? (
-                      <button
-                        type="button"
-                        onClick={() => handleCreateDraft(action)}
-                        disabled={creatingDraftId === action.prescription.id}
-                        className={cn(BUTTON_DARK, "mt-4 px-3 py-2")}
-                      >
-                        {creatingDraftId === action.prescription.id
-                          ? "Creation..."
-                          : copy.action}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => router.push(`/dashboard/invoices${entityQuery}`)}
-                        className={cn(BUTTON_LIGHT, "mt-4 px-3 py-2")}
-                      >
-                        {copy.action}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
 
         <section className="mt-4">
           <div className={cn(CARD, "overflow-hidden")}>
@@ -1505,7 +1657,11 @@ export default function TodayDashboard() {
                       style={{ maxHeight: WEEK_VISIBLE_HEIGHT }}
                     >
                       <div
-                        className="grid grid-cols-[56px_repeat(6,minmax(150px,1fr))] gap-2"
+                        className={cn(
+                          "grid grid-cols-[56px_repeat(6,minmax(150px,1fr))] gap-2 transition",
+                          dragReschedulePending &&
+                            "pointer-events-none opacity-70"
+                        )}
                         style={{ height: WEEK_GRID_HEIGHT }}
                       >
                         {/* Colonne des reperes horaires (heures + demi-heures discretes) */}
@@ -1521,7 +1677,14 @@ export default function TodayDashboard() {
                               )}
                               style={{
                                 top: `${line.top}px`,
-                                transform: "translateY(-50%)",
+                                // Le 1er (08:00) et le dernier (22:00) restent
+                                // dans le cadre : pas de clipping au bord.
+                                transform:
+                                  line.index === 0
+                                    ? "translateY(0)"
+                                    : line.index === WEEK_TOTAL_SLOTS
+                                      ? "translateY(-100%)"
+                                      : "translateY(-50%)",
                               }}
                             >
                               {line.label}
@@ -1532,6 +1695,8 @@ export default function TodayDashboard() {
                         {visibleAgendaDays.map((day) => (
                           <div
                             key={day.date}
+                            onDragOver={(event) => handleDayDragOver(day, event)}
+                            onDrop={(event) => handleDayDrop(day, event)}
                             className={cn(
                               "relative overflow-hidden rounded-[1.15rem] border backdrop-blur-xl",
                               day.isToday
@@ -1555,19 +1720,56 @@ export default function TodayDashboard() {
                               )
                             )}
 
+                            {/* Apercu du creneau cible pendant le drag */}
+                            {draggedAppointment &&
+                              dragOverSlot?.dayDate === day.date && (
+                                <div
+                                  className={cn(
+                                    "pointer-events-none absolute left-1 right-1 z-20 rounded-lg border-2 border-dashed transition",
+                                    dragOverSlot.valid
+                                      ? "border-cyan-300/70 bg-cyan-50/45"
+                                      : "border-[#e7b8ad]/80 bg-[#fdece8]/55"
+                                  )}
+                                  style={{
+                                    top: dragOverSlot.slotIndex * WEEK_SLOT_PX,
+                                    height:
+                                      Math.max(
+                                        getDraggedDurationMinutes(
+                                          draggedAppointment
+                                        ) / WEEK_SLOT_MINUTES,
+                                        1
+                                      ) * WEEK_SLOT_PX -
+                                      3,
+                                  }}
+                                />
+                              )}
+
                             {day.appointments.map((appointment) => (
                               <button
                                 key={appointment.id}
                                 type="button"
+                                draggable={!dragReschedulePending}
+                                onDragStart={(event) =>
+                                  handleAppointmentDragStart(appointment, event)
+                                }
+                                onDragEnd={handleAppointmentDragEnd}
                                 onClick={() =>
                                   setSelectedAppointmentId(appointment.id)
                                 }
                                 className={cn(
-                                  "absolute left-1 right-1 flex flex-col overflow-hidden rounded-lg border px-2 py-1 text-left shadow-[0_6px_16px_rgba(54,69,79,0.06)] backdrop-blur-xl transition hover:z-10 hover:shadow-[0_10px_22px_rgba(54,69,79,0.1)] focus:outline-none",
+                                  "absolute left-1 right-1 flex cursor-grab flex-col overflow-hidden rounded-lg border px-2 py-1 text-left shadow-[0_6px_16px_rgba(54,69,79,0.06)] backdrop-blur-xl transition hover:z-10 hover:shadow-[0_10px_22px_rgba(54,69,79,0.1)] focus:outline-none active:cursor-grabbing",
                                   weekAppointmentTone(appointment),
                                   weekSourceAccent(appointment.source),
                                   selectedAppointmentId === appointment.id &&
-                                    "z-10 ring-2 ring-cyan-300/60 ring-offset-1 ring-offset-white/40 shadow-[0_12px_26px_rgba(54,69,79,0.14)]"
+                                    "z-10 ring-2 ring-cyan-300/60 ring-offset-1 ring-offset-white/40 shadow-[0_12px_26px_rgba(54,69,79,0.14)]",
+                                  // Pendant un drag, les AUTRES cards laissent passer
+                                  // les evenements vers la colonne (drop sur creneau
+                                  // libre meme s'il est visuellement couvert).
+                                  draggedAppointment &&
+                                    draggedAppointment.id !== appointment.id &&
+                                    "pointer-events-none",
+                                  draggedAppointment?.id === appointment.id &&
+                                    "opacity-40"
                                 )}
                                 style={weekEventStyle(appointment)}
                                 title={`${formatTimeRange(
@@ -1577,15 +1779,16 @@ export default function TodayDashboard() {
                                   appointment.patient
                                 )} · ${weekSessionShortLabel(appointment)}`}
                               >
-                                <div className="flex items-center justify-between gap-1 leading-none">
-                                  <span className="text-[10.5px] font-bold tabular-nums">
+                                <div className="flex items-center justify-between gap-1.5 leading-none">
+                                  {/* L'heure ne se tronque jamais (shrink-0). */}
+                                  <span className="shrink-0 whitespace-nowrap text-[11px] font-bold tabular-nums">
                                     {formatTime(appointment.startsAt)}
                                   </span>
-                                  <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.06em] opacity-70">
+                                  <span className="min-w-0 truncate text-[9px] font-semibold uppercase tracking-[0.06em] opacity-70">
                                     {weekSessionShortLabel(appointment)}
                                   </span>
                                 </div>
-                                <p className="mt-0.5 truncate text-[12px] font-bold leading-tight tracking-[-0.02em]">
+                                <p className="mt-0.5 truncate text-[12.5px] font-bold leading-tight tracking-[-0.02em]">
                                   {patientName(appointment.patient)}
                                 </p>
                               </button>
@@ -1596,7 +1799,7 @@ export default function TodayDashboard() {
                     </div>
 
                     <p className="mt-2 px-1 text-[10px] font-medium text-black/30">
-                      08:00 — 19:00 prioritaire · faites défiler pour 19:00 — 22:00
+                      08:00 — 18:00 prioritaire · faites défiler pour 18:00 — 22:00
                     </p>
                   </div>
                 </div>
