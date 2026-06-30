@@ -1,4 +1,8 @@
-import { AppointmentSource } from "@prisma/client";
+import {
+  CalendarEventSyncStatus,
+  CalendarSyncActionStatus,
+  CalendarSyncActionType,
+} from "@prisma/client";
 import type { NextApiResponse } from "next";
 import { jsonError, jsonSuccess } from "../../../../../lib/accounting-api";
 import { AuthenticatedNextApiRequest, withAuth } from "../../../../../lib/auth";
@@ -6,6 +10,7 @@ import {
   APPOINTMENT_OVERLAP_MESSAGE,
   findAppointmentOverlap,
 } from "../../../../../lib/hugo-appointments";
+import { cleanCalendarNotes } from "../../../../../lib/hugo-display";
 import { requireHugoCabinet } from "../../../../../lib/hugo-auth";
 import { prisma } from "../../../../../lib/prisma";
 
@@ -13,9 +18,6 @@ interface RescheduleBody {
   startsAt?: unknown;
   endsAt?: unknown;
 }
-
-const EXTERNAL_SOURCE_MESSAGE =
-  "Ce rendez-vous vient d’un calendrier externe. Modifiez-le dans Apple Calendar ou Doctena pour éviter une désynchronisation.";
 
 const appointmentInclude = {
   patient: {
@@ -96,10 +98,20 @@ const rescheduleAppointment = async (
     },
     select: {
       id: true,
-      source: true,
+      patientId: true,
+      notes: true,
       session: {
         select: {
           id: true,
+        },
+      },
+      // Mapping Apple Calendar : si present, le deplacement doit preparer un
+      // push UPDATE_EVENT (traite par la queue/cron), jamais d'appel direct ici.
+      calendarEventMapping: {
+        select: {
+          id: true,
+          calendarConnectionId: true,
+          provider: true,
         },
       },
     },
@@ -107,10 +119,6 @@ const rescheduleAppointment = async (
 
   if (!appointment) {
     return jsonError(res, 404, "Appointment not found");
-  }
-
-  if (appointment.source !== AppointmentSource.MANUAL) {
-    return jsonError(res, 409, EXTERNAL_SOURCE_MESSAGE);
   }
 
   const overlap = await findAppointmentOverlap({
@@ -134,11 +142,44 @@ const rescheduleAppointment = async (
       include: appointmentInclude,
     });
 
+    // La seance liee suit le nouveau creneau.
     if (appointment.session?.id) {
       await tx.therapySession.update({
         where: { id: appointment.session.id },
         data: {
           scheduledAt: startsAt,
+        },
+      });
+    }
+
+    // Si le rendez-vous est mappe Apple Calendar, on prepare le push sortant
+    // via la meme logique que le PATCH Appointment standard : on marque le
+    // mapping LOCAL_PENDING et on enfile une CalendarSyncAction UPDATE_EVENT.
+    if (appointment.calendarEventMapping) {
+      await tx.calendarEventMapping.update({
+        where: { id: appointment.calendarEventMapping.id },
+        data: {
+          syncStatus: CalendarEventSyncStatus.LOCAL_PENDING,
+          lastSyncError: null,
+        },
+      });
+
+      await tx.calendarSyncAction.create({
+        data: {
+          entityId: cabinet.cabinetId,
+          appointmentId: appointment.id,
+          calendarConnectionId:
+            appointment.calendarEventMapping.calendarConnectionId,
+          mappingId: appointment.calendarEventMapping.id,
+          provider: appointment.calendarEventMapping.provider,
+          actionType: CalendarSyncActionType.UPDATE_EVENT,
+          status: CalendarSyncActionStatus.PENDING,
+          payload: {
+            startsAt: startsAt.toISOString(),
+            endsAt: endsAt.toISOString(),
+            patientId: appointment.patientId,
+            notes: cleanCalendarNotes(appointment.notes),
+          },
         },
       });
     }
@@ -149,6 +190,7 @@ const rescheduleAppointment = async (
   return jsonSuccess(res, {
     appointment: serializeAppointment(updatedAppointment),
     linkedSessionUpdated: Boolean(appointment.session?.id),
+    calendarSyncQueued: Boolean(appointment.calendarEventMapping),
   });
 };
 
