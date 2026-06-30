@@ -127,18 +127,37 @@ const buildEventUrl = (calendarUrl: string, uid: string) => {
   return new URL(`${encodeURIComponent(uid)}.ics`, baseUrl).toString();
 };
 
+// L'externalEventId stocke par Hugo combine l'UID Apple et, pour une
+// occurrence recurrente, le RECURRENCE-ID sous la forme "UID::RECURRENCE-ID".
+// On le re-decompose pour cibler le VRAI evenement Apple (jamais un nouvel UID
+// synthetique, qui creerait un doublon).
+export function splitExternalEventId(externalEventId: string) {
+  const separatorIndex = externalEventId.indexOf("::");
+
+  if (separatorIndex === -1) {
+    return { uid: externalEventId, recurrenceId: null as string | null };
+  }
+
+  return {
+    uid: externalEventId.slice(0, separatorIndex),
+    recurrenceId: externalEventId.slice(separatorIndex + 2) || null,
+  };
+}
+
 const buildIcsEvent = ({
   description,
   endsAt,
   startsAt,
   title,
   uid,
+  recurrenceId,
 }: {
   description?: string | null;
   endsAt: Date;
   startsAt: Date;
   title: string;
   uid: string;
+  recurrenceId?: string | null;
 }) => {
   const trimmedDescription = description?.trim();
 
@@ -148,6 +167,7 @@ const buildIcsEvent = ({
     "PRODID:-//Hugo//Calendar Sync//FR",
     "BEGIN:VEVENT",
     `UID:${escapeIcsText(uid)}`,
+    ...(recurrenceId ? [`RECURRENCE-ID:${escapeIcsText(recurrenceId)}`] : []),
     `DTSTAMP:${formatIcsDate(new Date())}`,
     `DTSTART:${formatIcsDate(startsAt)}`,
     `DTEND:${formatIcsDate(endsAt)}`,
@@ -411,16 +431,17 @@ export async function updateCalDavEvent(params: UpdateCalDavEventParams) {
   }
 
   const { endsAt, startsAt } = parseEventDates(params.startsAt, params.endsAt);
-  const eventUrl = buildEventUrl(
-    params.selectedCalendarUrl,
-    params.externalEventId
-  );
+  // Cibler le vrai evenement Apple (UID reel + RECURRENCE-ID eventuel) au lieu
+  // d'ecrire un nouvel evenement autonome a partir de la cle combinee.
+  const { uid, recurrenceId } = splitExternalEventId(params.externalEventId);
+  const eventUrl = buildEventUrl(params.selectedCalendarUrl, uid);
   const ics = buildIcsEvent({
     description: params.description,
     endsAt,
     startsAt,
     title: params.title,
-    uid: params.externalEventId,
+    uid,
+    recurrenceId,
   });
 
   const response = await fetch(eventUrl, {

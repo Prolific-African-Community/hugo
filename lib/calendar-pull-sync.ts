@@ -355,6 +355,92 @@ export async function pullCalendarConnectionEvents({
         },
       });
 
+      // Filet de securite : mapping existant mais Appointment lie disparu.
+      // On recree UN SEUL Appointment et on repointe le mapping, sans jamais
+      // produire de doublon pour le meme externalEventId.
+      if (mapping && !mapping.appointment) {
+        if (!patient) {
+          await prisma.calendarEventMapping.update({
+            where: { id: mapping.id },
+            data: {
+              syncStatus: CalendarEventSyncStatus.ERROR,
+              lastSyncError: "Mapping orphelin sans patient reconnu",
+            },
+          });
+
+          skippedCount += 1;
+          skippedEvents.push(
+            toSyncEventPayload({
+              uid,
+              externalEventId,
+              summary,
+              startsAt,
+              endsAt,
+              confidence: match.confidence,
+              reason: "Mapping orphelin sans patient reconnu",
+              patientName: null,
+              appointmentId: null,
+              persisted: false,
+              action: "skipped",
+            })
+          );
+          continue;
+        }
+
+        const appointment = await prisma.$transaction(async (tx) => {
+          const created = await tx.appointment.create({
+            data: {
+              entityId: cabinetId,
+              patientId: patient.id,
+              startsAt,
+              endsAt,
+              status: AppointmentStatus.SCHEDULED,
+              source: AppointmentSource.APPLE_CALENDAR,
+              notes,
+            },
+            include: appointmentInclude,
+          });
+
+          await tx.calendarEventMapping.update({
+            where: { id: mapping.id },
+            data: {
+              appointmentId: created.id,
+              lastPulledAt: new Date(),
+              syncStatus: CalendarEventSyncStatus.SYNCED,
+              lastSyncError: null,
+            },
+          });
+
+          return created;
+        });
+
+        importedCount += 1;
+        appointments.push({
+          ...serializeAppointment(appointment),
+          matchedAutomatically: true,
+          confidence: match.confidence,
+          reason: "Mapping orphelin: rendez-vous recréé",
+          persisted: true,
+          action: "created_from_orphan_mapping",
+        });
+        recognizedEvents.push(
+          toSyncEventPayload({
+            uid,
+            externalEventId,
+            summary,
+            startsAt,
+            endsAt,
+            confidence: match.confidence,
+            reason: "Mapping orphelin: rendez-vous recréé",
+            patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+            appointmentId: appointment.id,
+            persisted: true,
+            action: "created_from_orphan_mapping",
+          })
+        );
+        continue;
+      }
+
       if (mapping?.syncStatus === CalendarEventSyncStatus.LOCAL_PENDING) {
         await prisma.calendarEventMapping.update({
           where: { id: mapping.id },

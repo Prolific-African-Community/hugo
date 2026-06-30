@@ -91,6 +91,7 @@ const rescheduleAppointment = async (
     return jsonError(res, 400, "endsAt must be after startsAt");
   }
 
+  // Charger STRICTEMENT le rendez-vous existant (jamais de creation ici).
   const appointment = await prisma.appointment.findFirst({
     where: {
       id,
@@ -105,13 +106,14 @@ const rescheduleAppointment = async (
           id: true,
         },
       },
-      // Mapping Apple Calendar : si present, le deplacement doit preparer un
-      // push UPDATE_EVENT (traite par la queue/cron), jamais d'appel direct ici.
+      // Mapping Apple Calendar : si present, le deplacement prepare un push
+      // UPDATE_EVENT (traite par la queue/cron) sur le MEME evenement externe.
       calendarEventMapping: {
         select: {
           id: true,
           calendarConnectionId: true,
           provider: true,
+          externalEventId: true,
         },
       },
     },
@@ -132,65 +134,117 @@ const rescheduleAppointment = async (
     return jsonError(res, 409, APPOINTMENT_OVERLAP_MESSAGE);
   }
 
-  const updatedAppointment = await prisma.$transaction(async (tx) => {
-    const updated = await tx.appointment.update({
-      where: { id: appointment.id },
-      data: {
-        startsAt,
-        endsAt,
-      },
-      include: appointmentInclude,
-    });
+  const mapping = appointment.calendarEventMapping;
+  const linkedSessionUpdated = Boolean(appointment.session?.id);
+  const calendarSyncQueued = Boolean(mapping);
 
-    // La seance liee suit le nouveau creneau.
-    if (appointment.session?.id) {
-      await tx.therapySession.update({
-        where: { id: appointment.session.id },
+  const { updated, cancelledObsoleteActionsCount } = await prisma.$transaction(
+    async (tx) => {
+      // 1. Update PUR du seul Appointment existant (startsAt / endsAt).
+      const updatedAppointment = await tx.appointment.update({
+        where: { id: appointment.id },
         data: {
-          scheduledAt: startsAt,
+          startsAt,
+          endsAt,
         },
-      });
-    }
-
-    // Si le rendez-vous est mappe Apple Calendar, on prepare le push sortant
-    // via la meme logique que le PATCH Appointment standard : on marque le
-    // mapping LOCAL_PENDING et on enfile une CalendarSyncAction UPDATE_EVENT.
-    if (appointment.calendarEventMapping) {
-      await tx.calendarEventMapping.update({
-        where: { id: appointment.calendarEventMapping.id },
-        data: {
-          syncStatus: CalendarEventSyncStatus.LOCAL_PENDING,
-          lastSyncError: null,
-        },
+        include: appointmentInclude,
       });
 
-      await tx.calendarSyncAction.create({
-        data: {
-          entityId: cabinet.cabinetId,
-          appointmentId: appointment.id,
-          calendarConnectionId:
-            appointment.calendarEventMapping.calendarConnectionId,
-          mappingId: appointment.calendarEventMapping.id,
-          provider: appointment.calendarEventMapping.provider,
-          actionType: CalendarSyncActionType.UPDATE_EVENT,
-          status: CalendarSyncActionStatus.PENDING,
-          payload: {
-            startsAt: startsAt.toISOString(),
-            endsAt: endsAt.toISOString(),
-            patientId: appointment.patientId,
-            notes: cleanCalendarNotes(appointment.notes),
+      // 2. La seance liee suit le nouveau creneau.
+      if (appointment.session?.id) {
+        await tx.therapySession.update({
+          where: { id: appointment.session.id },
+          data: {
+            scheduledAt: startsAt,
           },
-        },
-      });
-    }
+        });
+      }
 
-    return updated;
-  });
+      let cancelledCount = 0;
+
+      // 3. Preparer le push Apple Calendar uniquement si le rendez-vous est
+      //    deja mappe (on ne cree jamais de CREATE_EVENT ici).
+      if (mapping) {
+        // 3a. Annuler les actions obsoletes du MEME rendez-vous (CREATE/UPDATE
+        //     encore PENDING/FAILED) pour eviter qu'une vieille action soit
+        //     poussee apres le nouveau deplacement. On ne touche pas aux
+        //     DELETE_EVENT.
+        const cancelled = await tx.calendarSyncAction.updateMany({
+          where: {
+            appointmentId: appointment.id,
+            actionType: {
+              in: [
+                CalendarSyncActionType.CREATE_EVENT,
+                CalendarSyncActionType.UPDATE_EVENT,
+              ],
+            },
+            status: {
+              in: [
+                CalendarSyncActionStatus.PENDING,
+                CalendarSyncActionStatus.FAILED,
+              ],
+            },
+          },
+          data: {
+            status: CalendarSyncActionStatus.CANCELLED,
+            error: "Annulée: rendez-vous déplacé (action obsolète).",
+            processedAt: new Date(),
+          },
+        });
+        cancelledCount = cancelled.count;
+
+        // 3b. Conserver le meme mapping, le marquer LOCAL_PENDING.
+        await tx.calendarEventMapping.update({
+          where: { id: mapping.id },
+          data: {
+            syncStatus: CalendarEventSyncStatus.LOCAL_PENDING,
+            lastSyncError: null,
+          },
+        });
+
+        // 3c. Une SEULE nouvelle action UPDATE_EVENT, avec l'externalEventId
+        //     existant pour cibler le meme evenement Apple Calendar.
+        await tx.calendarSyncAction.create({
+          data: {
+            entityId: cabinet.cabinetId,
+            appointmentId: appointment.id,
+            calendarConnectionId: mapping.calendarConnectionId,
+            mappingId: mapping.id,
+            provider: mapping.provider,
+            actionType: CalendarSyncActionType.UPDATE_EVENT,
+            status: CalendarSyncActionStatus.PENDING,
+            payload: {
+              startsAt: startsAt.toISOString(),
+              endsAt: endsAt.toISOString(),
+              appointmentId: appointment.id,
+              mappingId: mapping.id,
+              externalEventId: mapping.externalEventId,
+              patientId: appointment.patientId,
+              notes: cleanCalendarNotes(appointment.notes),
+            },
+          },
+        });
+      }
+
+      return {
+        updated: updatedAppointment,
+        cancelledObsoleteActionsCount: cancelledCount,
+      };
+    }
+  );
 
   return jsonSuccess(res, {
-    appointment: serializeAppointment(updatedAppointment),
-    linkedSessionUpdated: Boolean(appointment.session?.id),
-    calendarSyncQueued: Boolean(appointment.calendarEventMapping),
+    appointment: serializeAppointment(updated),
+    linkedSessionUpdated,
+    calendarSyncQueued,
+    debug: {
+      appointmentId: appointment.id,
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      linkedSessionUpdated,
+      calendarSyncQueued,
+      cancelledObsoleteActionsCount,
+    },
   });
 };
 

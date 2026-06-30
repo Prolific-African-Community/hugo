@@ -195,14 +195,12 @@ export async function pushCalendarSyncAction(
   }
 
   if (action.actionType === CalendarSyncActionType.UPDATE_EVENT) {
-    if (!mapping) {
+    // UPDATE_EVENT doit STRICTEMENT reutiliser l'evenement externe existant.
+    // Sans mapping/UID, on ne cree jamais un nouvel evenement (sinon doublon).
+    if (!mapping || !mapping.externalEventId) {
       throw new CalendarSyncActionPushError(
-        "Mapping Apple Calendar introuvable pour ce rendez-vous."
+        "Impossible de mettre à jour Apple Calendar : événement externe introuvable."
       );
-    }
-
-    if (!mapping.externalEventId) {
-      throw new CalendarSyncActionPushError("UID Apple Calendar manquant.");
     }
   }
 
