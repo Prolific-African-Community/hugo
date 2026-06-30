@@ -153,6 +153,7 @@ const WEEK_GRID_HEIGHT = WEEK_TOTAL_SLOTS * WEEK_SLOT_PX;
 const WEEK_VISIBLE_HEIGHT =
   (((AGENDA_PRIORITY_END_HOUR - AGENDA_START_HOUR) * 60) / WEEK_SLOT_MINUTES) *
   WEEK_SLOT_PX;
+const APP_BUILD_LABEL = "Hugo local build 2026-06-30 09:24";
 
 function Icon({
   name,
@@ -1355,6 +1356,9 @@ export default function TodayDashboard() {
                     </>
                   )}
                 </div>
+                <p className="mt-2 text-[10px] font-semibold text-black/20">
+                  {APP_BUILD_LABEL}
+                </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
