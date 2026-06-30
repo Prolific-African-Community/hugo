@@ -1781,14 +1781,14 @@ export default function TodayDashboard() {
                               >
                                 <div className="flex items-center justify-between gap-1.5 leading-none">
                                   {/* L'heure ne se tronque jamais (shrink-0). */}
-                                  <span className="shrink-0 whitespace-nowrap text-[11px] font-bold tabular-nums">
+                                  <span className="shrink-0 whitespace-nowrap text-[11px] font-semibold tabular-nums">
                                     {formatTime(appointment.startsAt)}
                                   </span>
                                   <span className="min-w-0 truncate text-[9px] font-semibold uppercase tracking-[0.06em] opacity-70">
                                     {weekSessionShortLabel(appointment)}
                                   </span>
                                 </div>
-                                <p className="mt-0.5 truncate text-[12.5px] font-bold leading-tight tracking-[-0.02em]">
+                                <p className="mt-0.5 truncate text-[11px] font-semibold leading-tight tracking-[-0.02em]">
                                   {patientName(appointment.patient)}
                                 </p>
                               </button>

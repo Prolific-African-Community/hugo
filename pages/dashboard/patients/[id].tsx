@@ -196,6 +196,38 @@ function amountLabel(invoice: Invoice) {
   }).format(invoice.amountCents / 100);
 }
 
+function invoiceReference(invoice: Invoice) {
+  return (
+    invoice.invoiceNumber || `Facture ${invoice.id.slice(0, 6).toUpperCase()}`
+  );
+}
+
+const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  DRAFT: "Brouillon",
+  READY: "Prête",
+  ISSUED: "Émise",
+  PAID: "Payée",
+  CANCELLED: "Annulée",
+};
+
+const INVOICE_STATUS_TONES: Record<InvoiceStatus, string> = {
+  DRAFT: "border-black/10 bg-black/[0.04] text-black/55",
+  READY: "border-[#eadfca]/80 bg-[#fff7e6]/80 text-[#7b6745]",
+  ISSUED: "border-cyan-100/80 bg-cyan-50/70 text-cyan-800/75",
+  PAID: "border-[#dbead7]/80 bg-[#eef6ec]/80 text-[#5f7f68]",
+  CANCELLED: "border-black/10 bg-black/[0.03] text-black/35",
+};
+
+function invoiceStatusLabel(status: InvoiceStatus) {
+  return INVOICE_STATUS_LABELS[status] || status;
+}
+
+function invoiceStatusTone(status: InvoiceStatus) {
+  return (
+    INVOICE_STATUS_TONES[status] || "border-black/10 bg-black/[0.04] text-black/55"
+  );
+}
+
 function KpiCard({
   detail,
   icon,
@@ -533,6 +565,70 @@ export default function PatientPremiumPage() {
                         seance(s) restante(s)
                       </p>
                     </div>
+                  )}
+                </div>
+
+                <div className={cn(CARD, "p-5")}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Icon name="receipt" className="h-4 w-4 text-[#9a6657]/70" />
+                      <h2 className="text-xl font-semibold tracking-[-0.03em]">
+                        Factures liées
+                      </h2>
+                    </div>
+                    {summary.invoices.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => router.push("/dashboard/invoices")}
+                        className="text-[11px] font-semibold text-cyan-700/70 transition hover:text-cyan-800"
+                      >
+                        Voir factures →
+                      </button>
+                    )}
+                  </div>
+
+                  {!summary.invoices.length ? (
+                    <p className="mt-4 text-sm font-medium text-black/45">
+                      Aucune facture liée à ce patient.
+                    </p>
+                  ) : (
+                    <ul className="mt-4 space-y-2.5">
+                      {summary.invoices.map((invoice) => (
+                        <li
+                          key={invoice.id}
+                          className="rounded-2xl border border-white/70 bg-white/55 px-3.5 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold tracking-[-0.01em]">
+                                {invoiceReference(invoice)}
+                              </p>
+                              <p className="mt-0.5 truncate text-xs font-medium text-black/45">
+                                {formatDate(
+                                  invoice.issuedAt || invoice.createdAt
+                                )}
+                                {invoice.prescription?.title
+                                  ? ` · ${invoice.prescription.title}`
+                                  : ""}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 flex-col items-end gap-1">
+                              <span className="text-sm font-bold tracking-[-0.02em]">
+                                {amountLabel(invoice)}
+                              </span>
+                              <span
+                                className={cn(
+                                  "rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]",
+                                  invoiceStatusTone(invoice.status)
+                                )}
+                              >
+                                {invoiceStatusLabel(invoice.status)}
+                              </span>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
 

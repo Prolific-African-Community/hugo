@@ -674,6 +674,16 @@ export default function PatientsDashboardPage() {
                     <div className="flex flex-wrap items-center gap-2 lg:justify-end">
                       <button
                         type="button"
+                        onClick={() =>
+                          router.push(`/dashboard/patients/${patient.id}`)
+                        }
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-cyan-100/80 bg-cyan-50/70 px-4 py-2.5 text-xs font-semibold text-cyan-800/80 shadow-[0_10px_24px_rgba(8,145,178,0.05)] backdrop-blur-xl transition hover:-translate-y-px hover:bg-cyan-100/70"
+                      >
+                        <NavIcon name="user" />
+                        Voir patient
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleEdit(patient)}
                         className={BUTTON_LIGHT}
                       >
